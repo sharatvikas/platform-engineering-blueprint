@@ -1,0 +1,199 @@
+##
+## Promotion Workflow — automated image promotion from staging to production.
+##
+## Triggered by: merging to main (after staging CI passes) or manually.
+## Flow: Detect new image tag → update Helm values → open PR → ArgoCD syncs.
+##
+## Design decisions:
+## - Image tag is the immutable artifact — no "latest" in production
+## - ArgoCD sync is triggered by Git state, never by this workflow directly
+## - PR-based promotion gives an audit trail and approval gate
+##
+name: Promote to Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: 'Service name (must match gitops/argocd/apps/<name>.yaml)'
+        required: true
+        type: string
+      image_tag:
+        description: 'Image tag to promote (e.g. sha-abc1234)'
+        required: true
+        type: string
+      staging_run_id:
+        description: 'Staging CI run ID to verify passed (optional)'
+        required: false
+        type: string
+
+  # Auto-promote when staging CI workflow completes successfully on main
+  workflow_run:
+    workflows: ["Staging CI"]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  validate:
+    name: Validate promotion inputs
+    runs-on: ubuntu-latest
+    outputs:
+      service: ${{ steps.resolve.outputs.service }}
+      image_tag: ${{ steps.resolve.outputs.image_tag }}
+      values_file: ${{ steps.resolve.outputs.values_file }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve inputs from trigger
+        id: resolve
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            SERVICE="${{ inputs.service }}"
+            IMAGE_TAG="${{ inputs.image_tag }}"
+          else
+            # Auto-trigger: read from staging workflow artifact
+            SERVICE=$(cat staging-artifact/service.txt 2>/dev/null || echo "")
+            IMAGE_TAG=$(cat staging-artifact/image-tag.txt 2>/dev/null || echo "")
+          fi
+
+          VALUES_FILE="gitops/argocd/apps/${SERVICE}/values-production.yaml"
+
+          if [ -z "$SERVICE" ] || [ -z "$IMAGE_TAG" ]; then
+            echo "::error::Could not resolve service or image_tag"
+            exit 1
+          fi
+
+          if [ ! -f "$VALUES_FILE" ]; then
+            echo "::error::Values file not found: $VALUES_FILE"
+            exit 1
+          fi
+
+          echo "service=${SERVICE}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "values_file=${VALUES_FILE}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify staging CI passed
+        if: inputs.staging_run_id != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CONCLUSION=$(gh run view ${{ inputs.staging_run_id }} --json conclusion -q '.conclusion')
+          if [ "$CONCLUSION" != "success" ]; then
+            echo "::error::Staging CI run ${{ inputs.staging_run_id }} did not succeed (conclusion: $CONCLUSION)"
+            exit 1
+          fi
+          echo "Staging run verified: success"
+
+  promote:
+    name: Update production image tag
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "platform-bot"
+          git config user.email "platform-bot@users.noreply.github.com"
+
+      - name: Create promotion branch
+        run: |
+          BRANCH="promote/${{ needs.validate.outputs.service }}/${{ needs.validate.outputs.image_tag }}"
+          git checkout -b "$BRANCH"
+          echo "BRANCH=${BRANCH}" >> "$GITHUB_ENV"
+
+      - name: Update image tag in values file
+        env:
+          VALUES_FILE: ${{ needs.validate.outputs.values_file }}
+          IMAGE_TAG: ${{ needs.validate.outputs.image_tag }}
+        run: |
+          # Update the image.tag field using yq
+          yq eval ".image.tag = \"${IMAGE_TAG}\"" -i "${VALUES_FILE}"
+
+          # Record promotion metadata in the values file comment
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          yq eval ".promotionMetadata.promotedAt = \"${TIMESTAMP}\"" -i "${VALUES_FILE}"
+          yq eval ".promotionMetadata.promotedBy = \"${{ github.actor }}\"" -i "${VALUES_FILE}"
+          yq eval ".promotionMetadata.stagingRun = \"${{ inputs.staging_run_id }}\"" -i "${VALUES_FILE}"
+
+          echo "Updated ${VALUES_FILE}:"
+          cat "${VALUES_FILE}"
+
+      - name: Commit and push
+        run: |
+          git add "${{ needs.validate.outputs.values_file }}"
+          git commit -m "chore(promote): ${{ needs.validate.outputs.service }} → ${{ needs.validate.outputs.image_tag }}
+
+          Promoted by: ${{ github.actor }}
+          Staging run: ${{ inputs.staging_run_id || 'auto' }}
+          "
+          git push origin "$BRANCH"
+
+      - name: Open pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create \
+            --title "promote: ${{ needs.validate.outputs.service }} → ${{ needs.validate.outputs.image_tag }}" \
+            --body "$(cat <<'PREOF'
+          ## Production Promotion
+
+          **Service:** `${{ needs.validate.outputs.service }}`
+          **Image tag:** `${{ needs.validate.outputs.image_tag }}`
+          **Promoted by:** @${{ github.actor }}
+          **Staging run:** ${{ inputs.staging_run_id || 'auto-trigger' }}
+
+          ### What this does
+          Updates `${{ needs.validate.outputs.values_file }}` to point to the new image tag.
+          ArgoCD will detect the diff and sync production automatically after merge.
+
+          ### Checklist
+          - [ ] Staging CI passed for this image tag
+          - [ ] No active incidents on the service
+          - [ ] Reviewed recent metrics baseline (error rate, latency)
+          - [ ] On-call is aware if deploying outside business hours
+
+          ### Rollback
+          If issues arise after merge, revert this PR or run the promote workflow
+          with the previous stable image tag.
+          PREOF
+          )" \
+            --head "$BRANCH" \
+            --base main \
+            --label "promotion,production"
+
+  notify:
+    name: Notify promotion started
+    needs: [validate, promote]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Post to Slack
+        if: env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          STATUS="${{ needs.promote.result }}"
+          COLOR=$([ "$STATUS" = "success" ] && echo "#36a64f" || echo "#ff0000")
+          EMOJI=$([ "$STATUS" = "success" ] && echo ":rocket:" || echo ":x:")
+
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"attachments\": [{
+                \"color\": \"${COLOR}\",
+                \"blocks\": [
+                  {\"type\": \"header\", \"text\": {\"type\": \"plain_text\", \"text\": \"${EMOJI} Production Promotion: ${{ needs.validate.outputs.service }}\"}},
+                  {\"type\": \"section\", \"fields\": [
+                    {\"type\": \"mrkdwn\", \"text\": \"*Status*\n${STATUS}\"},
+                    {\"type\": \"mrkdwn\", \"text\": \"*Image*\n\`${{ needs.validate.outputs.image_tag }}\`\"},
+                    {\"type\": \"mrkdwn\", \"text\": \"*Promoted by*\n${{ github.actor }}\"}
+                  ]}
+                ]
+              }]
+            }"
