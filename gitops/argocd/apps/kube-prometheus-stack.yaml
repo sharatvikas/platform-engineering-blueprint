@@ -1,0 +1,63 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kube-prometheus-stack
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: platform
+  source:
+    repoURL: https://prometheus-community.github.io/helm-charts
+    chart: kube-prometheus-stack
+    targetRevision: "58.3.3"
+    helm:
+      values: |
+        grafana:
+          adminPassword: "${GRAFANA_ADMIN_PASSWORD}"
+          sidecar:
+            dashboards:
+              enabled: true
+              searchNamespace: ALL
+          ingress:
+            enabled: true
+            ingressClassName: nginx
+            hosts:
+              - grafana.internal.example.com
+        prometheus:
+          prometheusSpec:
+            retention: 30d
+            retentionSize: "50GB"
+            storageSpec:
+              volumeClaimTemplate:
+                spec:
+                  storageClassName: gp3
+                  accessModes: ["ReadWriteOnce"]
+                  resources:
+                    requests:
+                      storage: 100Gi
+            # Pick up PrometheusRule objects in any namespace
+            ruleNamespaceSelector: {}
+            ruleSelector: {}
+            serviceMonitorNamespaceSelector: {}
+            serviceMonitorSelector: {}
+        alertmanager:
+          alertmanagerSpec:
+            storage:
+              volumeClaimTemplate:
+                spec:
+                  storageClassName: gp3
+                  accessModes: ["ReadWriteOnce"]
+                  resources:
+                    requests:
+                      storage: 10Gi
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
