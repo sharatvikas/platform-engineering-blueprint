@@ -1,0 +1,125 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: eks-cluster.platform.example.com
+  labels:
+    provider: aws
+    service: eks
+spec:
+  compositeTypeRef:
+    apiVersion: platform.example.com/v1alpha1
+    kind: EKSCluster
+
+  # Write-connection-details to a secret in the same namespace as the XR
+  writeConnectionSecretsToNamespace: crossplane-system
+
+  resources:
+    # ── VPC ─────────────────────────────────────────────────────────────────
+    - name: vpc
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: VPC
+        spec:
+          forProvider:
+            enableDnsHostnames: true
+            enableDnsSupport: true
+            tags:
+              managed-by: crossplane
+      patches:
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.parameters.region
+          toFieldPath: spec.forProvider.region
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.parameters.vpcCidr
+          toFieldPath: spec.forProvider.cidrBlock
+        - type: FromCompositeFieldPath
+          fromFieldPath: metadata.name
+          toFieldPath: spec.forProvider.tags["Name"]
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-vpc"
+
+    # ── EKS Cluster ──────────────────────────────────────────────────────────
+    - name: eks-cluster
+      base:
+        apiVersion: eks.aws.upbound.io/v1beta1
+        kind: Cluster
+        spec:
+          forProvider:
+            version: "1.29"
+            roleArnSelector:
+              matchControllerRef: true
+              matchLabels:
+                role: cluster
+            vpcConfig:
+              - endpointPrivateAccess: true
+                endpointPublicAccess: false
+                subnetIdSelector:
+                  matchControllerRef: true
+                  matchLabels:
+                    access: private
+            enabledClusterLogTypes:
+              - api
+              - audit
+              - authenticator
+              - controllerManager
+              - scheduler
+      patches:
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.parameters.region
+          toFieldPath: spec.forProvider.region
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.parameters.k8sVersion
+          toFieldPath: spec.forProvider.version
+        - type: FromCompositeFieldPath
+          fromFieldPath: metadata.name
+          toFieldPath: metadata.name
+        - type: ToCompositeFieldPath
+          fromFieldPath: status.atProvider.endpoint
+          toFieldPath: status.clusterEndpoint
+        - type: ToCompositeFieldPath
+          fromFieldPath: status.conditions[0].status
+          toFieldPath: status.ready
+
+    # ── Managed Node Group ────────────────────────────────────────────────────
+    - name: node-group
+      base:
+        apiVersion: eks.aws.upbound.io/v1beta1
+        kind: NodeGroup
+        spec:
+          forProvider:
+            amiType: AL2_x86_64
+            capacityType: ON_DEMAND
+            scalingConfig:
+              - desiredSize: 3
+                maxSize: 10
+                minSize: 1
+            updateConfig:
+              - maxUnavailable: 1
+            nodeRoleArnSelector:
+              matchControllerRef: true
+              matchLabels:
+                role: node
+            subnetIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                access: private
+            clusterNameSelector:
+              matchControllerRef: true
+      patches:
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.parameters.region
+          toFieldPath: spec.forProvider.region
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.parameters.nodeInstanceType
+          toFieldPath: spec.forProvider.instanceTypes[0]
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.parameters.minNodes
+          toFieldPath: spec.forProvider.scalingConfig[0].minSize
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.parameters.maxNodes
+          toFieldPath: spec.forProvider.scalingConfig[0].maxSize
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.parameters.desiredNodes
+          toFieldPath: spec.forProvider.scalingConfig[0].desiredSize
