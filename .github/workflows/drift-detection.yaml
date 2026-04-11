@@ -1,0 +1,249 @@
+##
+## Terraform Drift Detection — runs on a schedule and detects when live
+## infrastructure has drifted from the Terraform state file.
+##
+## On drift detection:
+##  1. Parses the plan output for unexpected changes
+##  2. Creates a GitHub issue with the full diff
+##  3. Posts a Slack alert with affected resources
+##
+## Design: read-only — runs `terraform plan` only, never applies.
+##
+name: Drift Detection
+
+on:
+  schedule:
+    # Run at 06:00 UTC Mon-Fri (before business hours)
+    - cron: '0 6 * * MON-FRI'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to check'
+        required: true
+        default: 'production'
+        type: choice
+        options: [production, staging]
+      workspace:
+        description: 'Terraform workspace'
+        required: false
+        default: 'default'
+
+env:
+  TF_VERSION: "1.7.5"
+  AWS_REGION: us-east-1
+
+jobs:
+  detect-drift:
+    name: Detect drift in ${{ inputs.environment || 'production' }}
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write       # OIDC auth to AWS
+      contents: read
+      issues: write         # Create drift issues
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_TERRAFORM_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Terraform init
+        working-directory: terraform/envs/${{ inputs.environment || 'production' }}
+        run: terraform init -input=false
+
+      - name: Select workspace
+        working-directory: terraform/envs/${{ inputs.environment || 'production' }}
+        run: |
+          WORKSPACE="${{ inputs.workspace || 'default' }}"
+          terraform workspace select "$WORKSPACE" || terraform workspace new "$WORKSPACE"
+
+      - name: Run drift detection plan
+        id: plan
+        working-directory: terraform/envs/${{ inputs.environment || 'production' }}
+        run: |
+          set +e
+          terraform plan \
+            -detailed-exitcode \
+            -input=false \
+            -out=tfplan \
+            -lock=false \
+            2>&1 | tee plan-output.txt
+          EXIT_CODE=${PIPESTATUS[0]}
+
+          # Exit codes: 0=no changes, 1=error, 2=drift detected
+          echo "exit_code=${EXIT_CODE}" >> "$GITHUB_OUTPUT"
+
+          if [ "$EXIT_CODE" -eq 0 ]; then
+            echo "drift_detected=false" >> "$GITHUB_OUTPUT"
+            echo "No drift detected — infrastructure matches Terraform state."
+          elif [ "$EXIT_CODE" -eq 2 ]; then
+            echo "drift_detected=true" >> "$GITHUB_OUTPUT"
+            echo "DRIFT DETECTED — infrastructure differs from Terraform state."
+
+            # Count changed resources
+            CHANGES=$(grep -c "^  # " plan-output.txt || true)
+            echo "change_count=${CHANGES}" >> "$GITHUB_OUTPUT"
+          else
+            echo "drift_detected=error" >> "$GITHUB_OUTPUT"
+            echo "::error::Terraform plan failed with exit code ${EXIT_CODE}"
+          fi
+
+      - name: Parse drift details
+        if: steps.plan.outputs.drift_detected == 'true'
+        id: parse
+        working-directory: terraform/envs/${{ inputs.environment || 'production' }}
+        run: |
+          # Extract the list of drifted resources
+          DRIFTED_RESOURCES=$(grep -E "^\s+# (aws_|module\.)" plan-output.txt \
+            | sed 's/^[[:space:]]*# //' \
+            | head -50 \
+            | jq -R -s 'split("\n") | map(select(length > 0))' || echo '[]')
+
+          echo "drifted_resources=${DRIFTED_RESOURCES}" >> "$GITHUB_OUTPUT"
+
+          # Truncate plan output for GitHub issue (max 65536 chars)
+          head -c 60000 plan-output.txt > plan-truncated.txt
+
+      - name: Create GitHub issue for drift
+        if: steps.plan.outputs.drift_detected == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ENVIRONMENT="${{ inputs.environment || 'production' }}"
+          DATE=$(date -u +"%Y-%m-%d")
+          PLAN_OUTPUT=$(cat terraform/envs/${ENVIRONMENT}/plan-truncated.txt)
+
+          # Check if a drift issue already exists for today
+          EXISTING=$(gh issue list \
+            --label "drift,${ENVIRONMENT}" \
+            --state open \
+            --search "Terraform Drift Detected: ${ENVIRONMENT} ${DATE}" \
+            --json number -q '.[0].number')
+
+          if [ -n "$EXISTING" ]; then
+            # Update existing issue with new run
+            gh issue comment "$EXISTING" \
+              --body "## Drift still present — re-check $(date -u +"%H:%M UTC")
+
+          \`\`\`
+          ${PLAN_OUTPUT}
+          \`\`\`"
+            echo "Updated existing drift issue #${EXISTING}"
+          else
+            # Create new drift issue
+            gh issue create \
+              --title "Terraform Drift Detected: ${ENVIRONMENT} ${DATE}" \
+              --label "drift,${ENVIRONMENT},infrastructure" \
+              --body "$(cat <<ISSUEEOF
+          ## Infrastructure Drift Detected
+
+          **Environment:** \`${ENVIRONMENT}\`
+          **Detected at:** $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          **Changed resources:** ${{ steps.plan.outputs.change_count }}
+          **Workflow run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          ### Action Required
+
+          Review the Terraform plan below to understand what changed outside of Terraform.
+          Options:
+          1. **Fix the drift**: Apply the Terraform plan to restore desired state
+          2. **Accept the change**: Update Terraform configuration to match current state
+          3. **Investigate**: Identify what/who made the out-of-band change
+
+          ### Terraform Plan Output
+
+          \`\`\`hcl
+          ${PLAN_OUTPUT}
+          \`\`\`
+
+          ### How to Resolve
+
+          \`\`\`bash
+          cd terraform/envs/${ENVIRONMENT}
+          terraform plan  # Review changes
+          terraform apply # Apply to fix drift (requires approval)
+          \`\`\`
+          ISSUEEOF
+          )"
+            echo "Created drift issue"
+          fi
+
+      - name: Post Slack notification on drift
+        if: steps.plan.outputs.drift_detected == 'true' && env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          ENVIRONMENT="${{ inputs.environment || 'production' }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"attachments\": [{
+                \"color\": \"#ff9900\",
+                \"blocks\": [
+                  {
+                    \"type\": \"header\",
+                    \"text\": {\"type\": \"plain_text\", \"text\": \":warning: Terraform Drift Detected: ${ENVIRONMENT}\"}
+                  },
+                  {
+                    \"type\": \"section\",
+                    \"fields\": [
+                      {\"type\": \"mrkdwn\", \"text\": \"*Environment*\n\`${ENVIRONMENT}\`\"},
+                      {\"type\": \"mrkdwn\", \"text\": \"*Changed Resources*\n${{ steps.plan.outputs.change_count }}\"},
+                      {\"type\": \"mrkdwn\", \"text\": \"*Detected*\n$(date -u +\"%Y-%m-%d %H:%M UTC\")\"}
+                    ]
+                  },
+                  {
+                    \"type\": \"actions\",
+                    \"elements\": [
+                      {
+                        \"type\": \"button\",
+                        \"text\": {\"type\": \"plain_text\", \"text\": \"View Workflow Run\"},
+                        \"url\": \"${RUN_URL}\"
+                      }
+                    ]
+                  }
+                ]
+              }]
+            }"
+
+      - name: Report clean state
+        if: steps.plan.outputs.drift_detected == 'false'
+        run: |
+          echo "Infrastructure is in sync with Terraform state."
+          echo "Environment: ${{ inputs.environment || 'production' }}"
+          echo "Checked at: $(date -u)"
+
+  close-resolved-issues:
+    name: Close resolved drift issues
+    needs: detect-drift
+    runs-on: ubuntu-latest
+    if: needs.detect-drift.outputs.drift_detected == 'false'
+    permissions:
+      issues: write
+    steps:
+      - name: Close open drift issues for this environment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ENVIRONMENT="${{ inputs.environment || 'production' }}"
+          OPEN_ISSUES=$(gh issue list \
+            --label "drift,${ENVIRONMENT}" \
+            --state open \
+            --json number -q '.[].number')
+
+          for issue in $OPEN_ISSUES; do
+            gh issue close "$issue" \
+              --comment "Drift resolved — infrastructure now matches Terraform state as of $(date -u). Closing automatically."
+            echo "Closed drift issue #${issue}"
+          done
