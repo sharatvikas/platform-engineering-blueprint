@@ -1,0 +1,139 @@
+# Backstage catalog — register all platform services and infrastructure components
+# Apply to your Backstage instance: this file serves as the root catalog entry
+# Import URL: https://github.com/sharatvikas/platform-engineering-blueprint/blob/main/gitops/backstage/catalog-info.yaml
+
+---
+# Platform System — groups all platform components
+apiVersion: backstage.io/v1alpha1
+kind: System
+metadata:
+  name: platform
+  title: Platform Engineering
+  description: Core platform infrastructure — EKS, VPC, observability, GitOps, and developer tooling
+  tags:
+    - platform
+    - infrastructure
+    - eks
+    - aws
+  annotations:
+    backstage.io/source-location: url:https://github.com/sharatvikas/platform-engineering-blueprint
+    github.com/project-slug: sharatvikas/platform-engineering-blueprint
+spec:
+  owner: group:platform-team
+  domain: infrastructure
+
+---
+# EKS Cluster — infrastructure resource
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: eks-production
+  title: EKS Production Cluster
+  description: Primary production EKS cluster running Kubernetes 1.29 with Karpenter autoscaling
+  tags:
+    - eks
+    - kubernetes
+    - production
+  annotations:
+    backstage.io/managed-by-location: url:https://github.com/sharatvikas/platform-engineering-blueprint/blob/main/terraform/envs/production/main.tf
+    aws/account-id: "123456789012"
+    aws/region: us-east-1
+    runbook-url: https://github.com/sharatvikas/platform-engineering-blueprint/blob/main/docs/runbooks/eks-cluster.md
+    grafana-dashboard-url: https://grafana.internal.sovrn.com/d/k8s-cluster
+spec:
+  type: kubernetes-cluster
+  lifecycle: production
+  owner: group:platform-team
+  system: platform
+  dependsOn:
+    - resource:vpc-production
+
+---
+# VPC — infrastructure resource
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: vpc-production
+  title: Production VPC
+  description: AWS VPC with multi-AZ subnets, NAT gateways, S3/ECR endpoints, and VPC Flow Logs
+  tags:
+    - vpc
+    - networking
+    - production
+  annotations:
+    backstage.io/managed-by-location: url:https://github.com/sharatvikas/platform-engineering-blueprint/blob/main/terraform/modules/vpc/main.tf
+spec:
+  type: cloud-resource
+  lifecycle: production
+  owner: group:platform-team
+  system: platform
+
+---
+# ArgoCD — component
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: argocd
+  title: ArgoCD GitOps Controller
+  description: Continuous delivery platform — syncs all platform applications from Git to Kubernetes
+  tags:
+    - gitops
+    - argocd
+    - delivery
+  annotations:
+    backstage.io/source-location: url:https://github.com/sharatvikas/platform-engineering-blueprint/tree/main/gitops/argocd
+    argocd/app-name: platform-root
+    backstage.io/kubernetes-id: argocd
+  links:
+    - url: https://argocd.internal.sovrn.com
+      title: ArgoCD UI
+      icon: dashboard
+spec:
+  type: service
+  lifecycle: production
+  owner: group:platform-team
+  system: platform
+  dependsOn:
+    - resource:eks-production
+
+---
+# Karpenter — component
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: karpenter
+  title: Karpenter Node Autoscaler
+  description: Just-in-time Kubernetes node provisioning with spot interruption handling and GPU support
+  tags:
+    - autoscaling
+    - karpenter
+    - kubernetes
+  annotations:
+    backstage.io/source-location: url:https://github.com/sharatvikas/platform-engineering-blueprint/tree/main/gitops/karpenter
+    backstage.io/kubernetes-id: karpenter
+  links:
+    - url: https://karpenter.sh/docs/
+      title: Karpenter Docs
+      icon: docs
+spec:
+  type: service
+  lifecycle: production
+  owner: group:platform-team
+  system: platform
+  dependsOn:
+    - resource:eks-production
+
+---
+# Platform Team
+apiVersion: backstage.io/v1alpha1
+kind: Group
+metadata:
+  name: platform-team
+  title: Platform Engineering Team
+  description: Responsible for EKS, VPC, observability, developer tooling, and GitOps infrastructure
+spec:
+  type: team
+  profile:
+    displayName: Platform Engineering
+    email: platform@sovrn.com
+  children: []
