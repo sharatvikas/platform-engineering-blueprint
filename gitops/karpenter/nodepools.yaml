@@ -1,0 +1,216 @@
+# Karpenter NodePool manifests
+# Apply after Karpenter is installed: kubectl apply -f gitops/karpenter/
+
+---
+# General-purpose NodePool — covers most workloads
+apiVersion: karpenter.sh/v1beta1
+kind: NodePool
+metadata:
+  name: general
+spec:
+  template:
+    metadata:
+      labels:
+        karpenter.sh/nodepool: general
+    spec:
+      nodeClassRef:
+        apiVersion: karpenter.k8s.aws/v1beta1
+        kind: EC2NodeClass
+        name: default
+
+      requirements:
+        - key: "karpenter.sh/capacity-type"
+          operator: In
+          values: ["on-demand", "spot"]
+
+        - key: "kubernetes.io/arch"
+          operator: In
+          values: ["amd64"]
+
+        # Wide instance family support — Karpenter picks the best fit
+        - key: "karpenter.k8s.aws/instance-family"
+          operator: In
+          values: ["m6i", "m6a", "m5", "m5a", "c6i", "c6a", "c5", "r6i", "r5"]
+
+        - key: "karpenter.k8s.aws/instance-size"
+          operator: NotIn
+          values: ["nano", "micro", "small"]   # Too small for production workloads
+
+      taints: []
+
+  limits:
+    cpu: "200"       # Max 200 vCPU across all Karpenter-provisioned nodes
+    memory: "800Gi"
+
+  disruption:
+    consolidationPolicy: WhenUnderutilized
+    consolidateAfter: 30s
+    expireAfter: 720h    # Rotate nodes every 30 days for security patches
+
+---
+# Spot-only NodePool for batch and non-critical workloads
+apiVersion: karpenter.sh/v1beta1
+kind: NodePool
+metadata:
+  name: spot-batch
+spec:
+  template:
+    metadata:
+      labels:
+        karpenter.sh/nodepool: spot-batch
+    spec:
+      nodeClassRef:
+        apiVersion: karpenter.k8s.aws/v1beta1
+        kind: EC2NodeClass
+        name: default
+
+      requirements:
+        - key: "karpenter.sh/capacity-type"
+          operator: In
+          values: ["spot"]
+
+        - key: "karpenter.k8s.aws/instance-family"
+          operator: In
+          values: ["m6i", "m6a", "m5", "m5a", "c6i", "c6a", "c5", "c5a", "r6i", "r5", "r5a"]
+
+      taints:
+        - key: "workload-type"
+          value: "batch"
+          effect: NoSchedule
+
+  limits:
+    cpu: "500"
+    memory: "2000Gi"
+
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 60s
+    expireAfter: 168h
+
+---
+# GPU NodePool for ML inference workloads
+apiVersion: karpenter.sh/v1beta1
+kind: NodePool
+metadata:
+  name: gpu
+spec:
+  template:
+    metadata:
+      labels:
+        karpenter.sh/nodepool: gpu
+    spec:
+      nodeClassRef:
+        apiVersion: karpenter.k8s.aws/v1beta1
+        kind: EC2NodeClass
+        name: gpu
+
+      requirements:
+        - key: "karpenter.sh/capacity-type"
+          operator: In
+          values: ["on-demand"]   # GPU spot is hard to get reliably
+
+        - key: "karpenter.k8s.aws/instance-family"
+          operator: In
+          values: ["g4dn", "g5", "p3"]
+
+      taints:
+        - key: "nvidia.com/gpu"
+          effect: NoSchedule
+
+  limits:
+    cpu: "64"
+    memory: "512Gi"
+
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 300s  # GPUs are expensive — wait longer before consolidating
+    expireAfter: 336h
+
+---
+# EC2NodeClass — default (AL2, encrypted gp3, private subnets)
+apiVersion: karpenter.k8s.aws/v1beta1
+kind: EC2NodeClass
+metadata:
+  name: default
+spec:
+  amiFamily: AL2
+
+  # Subnet selection by tag (set by VPC module)
+  subnetSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: "${CLUSTER_NAME}"
+        kubernetes.io/role/internal-elb: "1"
+
+  # Security group selection
+  securityGroupSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: "${CLUSTER_NAME}"
+
+  instanceProfile: "${CLUSTER_NAME}-karpenter-node"
+
+  blockDeviceMappings:
+    - deviceName: /dev/xvda
+      ebs:
+        volumeSize: 50Gi
+        volumeType: gp3
+        iops: 3000
+        throughput: 125
+        encrypted: true
+        deleteOnTermination: true
+
+  metadataOptions:
+    httpTokens: required          # IMDSv2 enforced
+    httpPutResponseHopLimit: 1
+    httpEndpoint: enabled
+
+  tags:
+    ManagedBy: karpenter
+    Cluster: "${CLUSTER_NAME}"
+
+---
+# EC2NodeClass — GPU nodes with larger EBS and nvidia driver userData
+apiVersion: karpenter.k8s.aws/v1beta1
+kind: EC2NodeClass
+metadata:
+  name: gpu
+spec:
+  amiFamily: AL2
+
+  subnetSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: "${CLUSTER_NAME}"
+        kubernetes.io/role/internal-elb: "1"
+
+  securityGroupSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: "${CLUSTER_NAME}"
+
+  instanceProfile: "${CLUSTER_NAME}-karpenter-node"
+
+  blockDeviceMappings:
+    - deviceName: /dev/xvda
+      ebs:
+        volumeSize: 200Gi
+        volumeType: gp3
+        iops: 6000
+        throughput: 500
+        encrypted: true
+        deleteOnTermination: true
+
+  metadataOptions:
+    httpTokens: required
+    httpPutResponseHopLimit: 1
+    httpEndpoint: enabled
+
+  userData: |
+    #!/bin/bash
+    # Install NVIDIA drivers and container toolkit
+    sudo yum install -y amazon-linux-extras
+    sudo amazon-linux-extras install -y kernel-ng
+    sudo yum install -y gcc make kernel-devel-$(uname -r)
+    # Container toolkit will be installed by the nvidia device plugin DaemonSet
+
+  tags:
+    ManagedBy: karpenter
+    Cluster: "${CLUSTER_NAME}"
+    NodeType: gpu
