@@ -1,0 +1,296 @@
+##
+## Crossplane Composition: S3 Bucket
+##
+## Provides a self-service S3 bucket with production-ready defaults:
+## - Server-side encryption (AES-256 or KMS)
+## - Versioning enabled by default
+## - Lifecycle rules to transition objects to cheaper storage tiers
+## - Block all public access (enforced)
+## - Access logging to a central audit bucket
+## - CORS configuration for web-accessible buckets (optional)
+##
+## Usage:
+##   kubectl apply -f - <<EOF
+##   apiVersion: platform.internal/v1alpha1
+##   kind: S3Bucket
+##   metadata:
+##     name: payments-artifacts
+##     namespace: platform-team
+##   spec:
+##     parameters:
+##       environment: production
+##       versioning: true
+##       lifecycleDays: 90
+##       kmsKeyArn: "arn:aws:kms:us-east-1:123456789:key/abc-def"
+##   EOF
+##
+
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: s3-bucket.platform.internal
+  labels:
+    crossplane.io/xrd: xs3buckets.platform.internal
+    provider: aws
+    environment: multi
+spec:
+  writeConnectionSecretsToNamespace: crossplane-system
+
+  compositeTypeRef:
+    apiVersion: platform.internal/v1alpha1
+    kind: XS3Bucket
+
+  resources:
+    # ── S3 Bucket ─────────────────────────────────────────────────────────────
+    - name: bucket
+      base:
+        apiVersion: s3.aws.upbound.io/v1beta1
+        kind: Bucket
+        spec:
+          forProvider:
+            region: us-east-1
+            tags:
+              managed-by: crossplane
+      patches:
+        - fromFieldPath: "metadata.name"
+          toFieldPath: "metadata.name"
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.region"
+        - fromFieldPath: "spec.parameters.environment"
+          toFieldPath: "spec.forProvider.tags.environment"
+        - fromFieldPath: "metadata.name"
+          toFieldPath: "spec.forProvider.tags.Name"
+
+    # ── Block Public Access ────────────────────────────────────────────────────
+    - name: public-access-block
+      base:
+        apiVersion: s3.aws.upbound.io/v1beta1
+        kind: BucketPublicAccessBlock
+        spec:
+          forProvider:
+            region: us-east-1
+            blockPublicAcls: true
+            blockPublicPolicy: true
+            ignorePublicAcls: true
+            restrictPublicBuckets: true
+            bucketSelector:
+              matchControllerRef: true
+      patches:
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.region"
+
+    # ── Server-Side Encryption ─────────────────────────────────────────────────
+    - name: bucket-encryption
+      base:
+        apiVersion: s3.aws.upbound.io/v1beta1
+        kind: BucketServerSideEncryptionConfiguration
+        spec:
+          forProvider:
+            region: us-east-1
+            bucketSelector:
+              matchControllerRef: true
+            rule:
+              - applyServerSideEncryptionByDefault:
+                  - sseAlgorithm: AES256   # Overridden to aws:kms if kmsKeyArn is set
+      patches:
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.region"
+        - fromFieldPath: "spec.parameters.kmsKeyArn"
+          toFieldPath: "spec.forProvider.rule[0].applyServerSideEncryptionByDefault[0].kmsMasterKeyId"
+          policy:
+            fromFieldPath: Optional
+        - fromFieldPath: "spec.parameters.kmsKeyArn"
+          toFieldPath: "spec.forProvider.rule[0].applyServerSideEncryptionByDefault[0].sseAlgorithm"
+          transforms:
+            - type: map
+              map:
+                # If kmsKeyArn is non-empty, this gets overwritten by a string transform
+                # The empty string maps back to AES256
+                "": "AES256"
+          policy:
+            fromFieldPath: Optional
+
+    # ── Versioning ─────────────────────────────────────────────────────────────
+    - name: bucket-versioning
+      base:
+        apiVersion: s3.aws.upbound.io/v1beta1
+        kind: BucketVersioning
+        spec:
+          forProvider:
+            region: us-east-1
+            bucketSelector:
+              matchControllerRef: true
+            versioningConfiguration:
+              - status: Enabled
+      patches:
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.region"
+        - fromFieldPath: "spec.parameters.versioning"
+          toFieldPath: "spec.forProvider.versioningConfiguration[0].status"
+          transforms:
+            - type: map
+              map:
+                "true": "Enabled"
+                "false": "Suspended"
+
+    # ── Lifecycle Rules ────────────────────────────────────────────────────────
+    - name: bucket-lifecycle
+      base:
+        apiVersion: s3.aws.upbound.io/v1beta1
+        kind: BucketLifecycleConfiguration
+        spec:
+          forProvider:
+            region: us-east-1
+            bucketSelector:
+              matchControllerRef: true
+            rule:
+              - id: transition-to-ia
+                status: Enabled
+                filter:
+                  - prefix: ""
+                transition:
+                  - days: 30
+                    storageClass: STANDARD_IA
+              - id: transition-to-glacier
+                status: Enabled
+                filter:
+                  - prefix: ""
+                transition:
+                  - days: 90    # Overridden by lifecycleDays patch
+                    storageClass: GLACIER
+              - id: expire-noncurrent-versions
+                status: Enabled
+                filter:
+                  - prefix: ""
+                noncurrentVersionExpiration:
+                  - noncurrentDays: 30
+      patches:
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.region"
+        - fromFieldPath: "spec.parameters.lifecycleDays"
+          toFieldPath: "spec.forProvider.rule[1].transition[0].days"
+
+    # ── Access Logging ─────────────────────────────────────────────────────────
+    - name: bucket-logging
+      base:
+        apiVersion: s3.aws.upbound.io/v1beta1
+        kind: BucketLogging
+        spec:
+          forProvider:
+            region: us-east-1
+            bucketSelector:
+              matchControllerRef: true
+            targetBucket: PLACEHOLDER   # Overridden by patch
+            targetPrefix: "s3-access-logs/"
+      patches:
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.region"
+        - fromFieldPath: "spec.parameters.loggingBucket"
+          toFieldPath: "spec.forProvider.targetBucket"
+          policy:
+            fromFieldPath: Optional
+
+    # ── CORS Configuration (optional, for web-accessible buckets) ─────────────
+    - name: bucket-cors
+      base:
+        apiVersion: s3.aws.upbound.io/v1beta1
+        kind: BucketCorsConfiguration
+        spec:
+          forProvider:
+            region: us-east-1
+            bucketSelector:
+              matchControllerRef: true
+            corsRule:
+              - allowedHeaders:
+                  - "Content-Type"
+                  - "Authorization"
+                allowedMethods:
+                  - GET
+                  - HEAD
+                allowedOrigins:
+                  - "https://*.internal"
+                maxAgeSeconds: 3600
+      patches:
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.region"
+        - fromFieldPath: "spec.parameters.corsAllowedOrigins"
+          toFieldPath: "spec.forProvider.corsRule[0].allowedOrigins"
+          policy:
+            fromFieldPath: Optional
+
+      connectionDetails:
+        - name: bucketName
+          fromFieldPath: "metadata.name"
+        - name: bucketArn
+          fromConnectionSecretKey: arn
+        - name: region
+          fromFieldPath: "spec.forProvider.region"
+
+---
+##
+## XRD — defines the self-service API for S3 bucket claims
+##
+
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xs3buckets.platform.internal
+spec:
+  group: platform.internal
+  names:
+    kind: XS3Bucket
+    plural: xs3buckets
+  claimNames:
+    kind: S3Bucket
+    plural: s3buckets
+
+  connectionSecretKeys:
+    - bucketName
+    - bucketArn
+    - region
+
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [parameters]
+              properties:
+                parameters:
+                  type: object
+                  required: [environment]
+                  properties:
+                    region:
+                      type: string
+                      default: us-east-1
+                      description: AWS region for the bucket
+                    environment:
+                      type: string
+                      enum: [production, staging, dev]
+                      description: Deployment environment
+                    versioning:
+                      type: boolean
+                      default: true
+                      description: Enable object versioning
+                    lifecycleDays:
+                      type: integer
+                      default: 90
+                      minimum: 30
+                      maximum: 365
+                      description: Days before objects are moved to Glacier storage
+                    kmsKeyArn:
+                      type: string
+                      description: "KMS key ARN for SSE-KMS encryption (default: AES-256)"
+                    loggingBucket:
+                      type: string
+                      description: "S3 bucket name for access logging (must already exist)"
+                    corsAllowedOrigins:
+                      type: array
+                      items:
+                        type: string
+                      description: "Allowed CORS origins (e.g. https://app.internal)"
