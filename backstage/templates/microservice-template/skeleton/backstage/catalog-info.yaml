@@ -1,0 +1,18 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: ${{ values.name }}
+  title: ${{ values.name | title }}
+  description: ${{ values.description }}
+  annotations:
+    backstage.io/source-location: url:${{ values.repoUrl }}
+    github.com/project-slug: sharatvikas/${{ values.name }}
+    prometheus.io/rule: job:request_error_rate:ratio_rate5m{job="${{ values.name }}"}
+  tags:
+    - ${{ values.language }}
+    - microservice
+spec:
+  type: service
+  lifecycle: production
+  owner: ${{ values.owner }}
+  system: internal-developer-platform

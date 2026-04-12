@@ -1,0 +1,204 @@
+##
+## Backstage Software Template: Microservice Scaffold
+##
+## Self-service template for engineers to create production-ready microservices.
+## Scaffolds: Go or Python service repo, GitHub Actions CI, ArgoCD App,
+## Crossplane-based infra claims, Backstage catalog registration.
+##
+## Capabilities:
+##   - Language choice: Go (Gin) or Python (FastAPI)
+##   - Optional PostgreSQL database via Crossplane RDS claim
+##   - Optional S3 bucket via Crossplane S3 claim
+##   - Kubernetes Deployment + HPA + PodDisruptionBudget
+##   - Prometheus ServiceMonitor pre-wired
+##   - ArgoCD Application registered to gitops/apps/
+##   - Backstage catalog entry auto-registered
+##
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: microservice-template
+  title: Microservice — Go or Python
+  description: >
+    Scaffold a production-ready microservice with CI/CD, Kubernetes manifests,
+    optional database, and full observability pre-wired.
+  tags:
+    - recommended
+    - microservice
+    - go
+    - python
+    - kubernetes
+spec:
+  owner: platform-team
+  type: service
+
+  parameters:
+    - title: Service Details
+      required: [name, owner, description, language]
+      properties:
+        name:
+          title: Service Name
+          type: string
+          description: Lowercase, hyphenated service name (e.g. payments-api)
+          pattern: "^[a-z][a-z0-9-]{2,62}$"
+          ui:autofocus: true
+        owner:
+          title: Owner
+          type: string
+          description: Team owning this service (Backstage group reference)
+          ui:field: OwnerPicker
+          ui:options:
+            catalogFilter:
+              kind: Group
+        description:
+          title: Description
+          type: string
+          description: One-line description of what this service does
+        language:
+          title: Language
+          type: string
+          enum: [go, python]
+          enumNames: ["Go (Gin)", "Python (FastAPI)"]
+          default: go
+
+    - title: Kubernetes Configuration
+      required: [namespace, replicas]
+      properties:
+        namespace:
+          title: Target Namespace
+          type: string
+          enum: [production, staging, development]
+          default: production
+        replicas:
+          title: Initial Replicas
+          type: integer
+          minimum: 1
+          maximum: 20
+          default: 2
+        cpu_request:
+          title: CPU Request
+          type: string
+          default: "100m"
+        memory_request:
+          title: Memory Request
+          type: string
+          default: "128Mi"
+        cpu_limit:
+          title: CPU Limit
+          type: string
+          default: "500m"
+        memory_limit:
+          title: Memory Limit
+          type: string
+          default: "512Mi"
+
+    - title: Infrastructure
+      properties:
+        needs_database:
+          title: PostgreSQL Database
+          type: boolean
+          default: false
+          description: Provision a Crossplane-managed RDS PostgreSQL instance
+        db_instance_class:
+          title: DB Instance Class
+          type: string
+          enum: [db.t3.micro, db.t3.small, db.t3.medium, db.r6g.large]
+          default: db.t3.small
+          ui:widget: select
+        needs_s3:
+          title: S3 Bucket
+          type: boolean
+          default: false
+          description: Provision a Crossplane-managed S3 bucket for this service
+        s3_versioning:
+          title: S3 Versioning
+          type: string
+          enum: [Enabled, Suspended]
+          default: Enabled
+
+    - title: Repository
+      required: [repoUrl]
+      properties:
+        repoUrl:
+          title: Repository Location
+          type: string
+          ui:field: RepoUrlPicker
+          ui:options:
+            allowedHosts: [github.com]
+            allowedOrganizations: [sharatvikas]
+
+  steps:
+    - id: fetch-base
+      name: Fetch Base Template
+      action: fetch:template
+      input:
+        url: ./skeleton
+        values:
+          name: ${{ parameters.name }}
+          owner: ${{ parameters.owner }}
+          description: ${{ parameters.description }}
+          language: ${{ parameters.language }}
+          namespace: ${{ parameters.namespace }}
+          replicas: ${{ parameters.replicas }}
+          cpu_request: ${{ parameters.cpu_request }}
+          memory_request: ${{ parameters.memory_request }}
+          cpu_limit: ${{ parameters.cpu_limit }}
+          memory_limit: ${{ parameters.memory_limit }}
+          needs_database: ${{ parameters.needs_database }}
+          db_instance_class: ${{ parameters.db_instance_class }}
+          needs_s3: ${{ parameters.needs_s3 }}
+          s3_versioning: ${{ parameters.s3_versioning }}
+
+    - id: publish
+      name: Publish to GitHub
+      action: publish:github
+      input:
+        allowedHosts: [github.com]
+        description: ${{ parameters.description }}
+        repoUrl: ${{ parameters.repoUrl }}
+        defaultBranch: main
+        gitCommitMessage: "chore: initial scaffold from IDP microservice template"
+        repoVisibility: private
+
+    - id: register-catalog
+      name: Register in Backstage Catalog
+      action: catalog:register
+      input:
+        repoContentsUrl: ${{ steps.publish.output.repoContentsUrl }}
+        catalogInfoPath: "/backstage/catalog-info.yaml"
+
+    - id: argocd-app
+      name: Create ArgoCD Application
+      action: fetch:template
+      input:
+        url: ./argocd-app-skeleton
+        targetPath: ../../gitops/apps/${{ parameters.name }}
+        values:
+          name: ${{ parameters.name }}
+          namespace: ${{ parameters.namespace }}
+          repoUrl: ${{ steps.publish.output.remoteUrl }}
+
+    - id: argocd-commit
+      name: Register ArgoCD App in GitOps Repo
+      action: publish:github:pull-request
+      input:
+        repoUrl: github.com?repo=platform-engineering-blueprint&owner=sharatvikas
+        title: "feat: add ArgoCD app for ${{ parameters.name }}"
+        description: |
+          Auto-generated by Backstage scaffolder.
+          Service: ${{ parameters.name }}
+          Owner: ${{ parameters.owner }}
+          Namespace: ${{ parameters.namespace }}
+        branchName: scaffold/${{ parameters.name }}
+        sourcePath: ../../gitops/apps/${{ parameters.name }}
+        targetPath: gitops/apps/${{ parameters.name }}
+
+  output:
+    links:
+      - title: Repository
+        url: ${{ steps.publish.output.remoteUrl }}
+      - title: Open in Backstage Catalog
+        icon: catalog
+        entityRef: ${{ steps.register-catalog.output.entityRef }}
+      - title: ArgoCD Pull Request
+        url: ${{ steps.argocd-commit.output.remoteUrl }}

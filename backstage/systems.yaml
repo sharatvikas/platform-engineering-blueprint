@@ -1,0 +1,39 @@
+##
+## Backstage System definitions — logical groupings of services and components
+##
+apiVersion: backstage.io/v1alpha1
+kind: System
+metadata:
+  name: internal-developer-platform
+  title: Internal Developer Platform
+  description: >
+    Self-service platform for engineers to provision infrastructure, deploy
+    services, and manage their operational posture without platform team
+    intervention.
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+  tags:
+    - platform
+    - idp
+    - self-service
+  links:
+    - url: https://backstage.internal/
+      title: Backstage Portal
+      icon: dashboard
+    - url: https://argocd.internal/
+      title: ArgoCD GitOps
+      icon: git
+spec:
+  owner: platform-team
+  domain: platform
+
+---
+
+apiVersion: backstage.io/v1alpha1
+kind: Domain
+metadata:
+  name: platform
+  title: Platform
+  description: Infrastructure, tooling, and shared services managed by the platform team
+spec:
+  owner: platform-team

@@ -1,0 +1,139 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${{ values.name }}
+  namespace: ${{ values.namespace }}
+  labels:
+    app: ${{ values.name }}
+    app.kubernetes.io/managed-by: argocd
+spec:
+  replicas: ${{ values.replicas }}
+  selector:
+    matchLabels:
+      app: ${{ values.name }}
+  template:
+    metadata:
+      labels:
+        app: ${{ values.name }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: ${{ values.name }}
+          image: ghcr.io/sharatvikas/${{ values.name }}:latest
+          ports:
+            - containerPort: 8080
+              name: http
+          resources:
+            requests:
+              cpu: ${{ values.cpu_request }}
+              memory: ${{ values.memory_request }}
+            limits:
+              cpu: ${{ values.cpu_limit }}
+              memory: ${{ values.memory_limit }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          env:
+            - name: SERVICE_NAME
+              value: ${{ values.name }}
+            - name: NAMESPACE
+              value: ${{ values.namespace }}
+            {% if values.needs_database %}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: ${{ values.name }}-db-credentials
+                  key: url
+            {% endif %}
+            {% if values.needs_s3 %}
+            - name: S3_BUCKET
+              value: ${{ values.name }}-data
+            {% endif %}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: ${{ values.name }}
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ${{ values.name }}-pdb
+  namespace: ${{ values.namespace }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ${{ values.name }}
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ${{ values.name }}-hpa
+  namespace: ${{ values.namespace }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ${{ values.name }}
+  minReplicas: ${{ values.replicas }}
+  maxReplicas: ${{ [values.replicas * 4, 20] | min }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+
+---
+{% if values.needs_database %}
+apiVersion: platform.sharatvikas.io/v1alpha1
+kind: RDSInstance
+metadata:
+  name: ${{ values.name }}-db
+  namespace: ${{ values.namespace }}
+spec:
+  instanceClass: ${{ values.db_instance_class }}
+  engine: postgres
+  engineVersion: "15"
+  dbName: ${{ values.name | replace("-", "_") }}
+  environment: ${{ values.namespace }}
+  credentialsSecret: ${{ values.name }}-db-credentials
+
+---
+{% endif %}
+{% if values.needs_s3 %}
+apiVersion: platform.sharatvikas.io/v1alpha1
+kind: S3Bucket
+metadata:
+  name: ${{ values.name }}-data
+  namespace: ${{ values.namespace }}
+spec:
+  versioning: ${{ values.s3_versioning }}
+  encryption: AES256
+  publicAccessBlock: true
+
+{% endif %}

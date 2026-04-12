@@ -1,0 +1,55 @@
+##
+## Platform API definitions registered in Backstage
+##
+apiVersion: backstage.io/v1alpha1
+kind: API
+metadata:
+  name: argocd-api
+  title: ArgoCD REST API
+  description: ArgoCD application management and sync API
+  tags:
+    - rest
+    - gitops
+spec:
+  type: openapi
+  lifecycle: production
+  owner: platform-team
+  system: internal-developer-platform
+  definition: |
+    openapi: "3.0.0"
+    info:
+      title: ArgoCD API
+      version: "2.0"
+    paths:
+      /api/v1/applications:
+        get:
+          summary: List applications
+          responses:
+            "200":
+              description: Application list
+
+---
+
+apiVersion: backstage.io/v1alpha1
+kind: API
+metadata:
+  name: sre-mcp-api
+  title: SRE MCP Server API
+  description: Model Context Protocol API for SRE toolchain integration
+  tags:
+    - mcp
+    - ai
+spec:
+  type: grpc
+  lifecycle: production
+  owner: sre-team
+  system: internal-developer-platform
+  definition: |
+    syntax = "proto3";
+    package mcp.v1;
+    service MCP {
+      rpc ListTools (ListToolsRequest) returns (ListToolsResponse);
+      rpc CallTool (CallToolRequest) returns (CallToolResponse);
+      rpc ListResources (ListResourcesRequest) returns (ListResourcesResponse);
+      rpc ReadResource (ReadResourceRequest) returns (ReadResourceResponse);
+    }
