@@ -1,0 +1,363 @@
+##
+## Crossplane Composition: RDS Instance
+##
+## Provides a self-service RDS PostgreSQL instance with sane production defaults:
+## - Multi-AZ for production, Single-AZ for non-production
+## - Encryption at rest with KMS
+## - Automated backups with configurable retention
+## - Parameter group tuned for PostgreSQL 15
+## - Security group locked to cluster nodes only
+## - Enhanced monitoring (60s interval)
+##
+## Usage:
+##   kubectl apply -f - <<EOF
+##   apiVersion: platform.internal/v1alpha1
+##   kind: RDSInstance
+##   metadata:
+##     name: payments-db
+##     namespace: platform-team
+##   spec:
+##     parameters:
+##       engine: postgres
+##       engineVersion: "15.4"
+##       instanceClass: db.m6g.large
+##       allocatedStorageGB: 100
+##       environment: production
+##       allowedCIDRs:
+##         - "10.0.0.0/8"
+##     writeConnectionSecretToRef:
+##       name: payments-db-connection
+##       namespace: payments
+##   EOF
+##
+
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: rds-instance.platform.internal
+  labels:
+    crossplane.io/xrd: xrdsinstances.platform.internal
+    provider: aws
+    environment: multi
+spec:
+  writeConnectionSecretsToNamespace: crossplane-system
+
+  compositeTypeRef:
+    apiVersion: platform.internal/v1alpha1
+    kind: XRDSInstance
+
+  resources:
+    # ── DB Subnet Group ────────────────────────────────────────────────────────
+    - name: subnet-group
+      base:
+        apiVersion: rds.aws.upbound.io/v1beta1
+        kind: SubnetGroup
+        spec:
+          forProvider:
+            region: us-east-1
+            description: "Managed by Crossplane — RDS subnet group"
+            subnetIdSelector:
+              matchLabels:
+                access: private
+      patches:
+        - fromFieldPath: "metadata.name"
+          toFieldPath: "metadata.name"
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-subnet-group"
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.region"
+        - fromFieldPath: "metadata.labels"
+          toFieldPath: "metadata.labels"
+
+    # ── Parameter Group (PostgreSQL 15 tuned settings) ─────────────────────────
+    - name: parameter-group
+      base:
+        apiVersion: rds.aws.upbound.io/v1beta1
+        kind: ParameterGroup
+        spec:
+          forProvider:
+            region: us-east-1
+            family: postgres15
+            description: "Managed by Crossplane — PostgreSQL 15 tuned"
+            parameter:
+              - name: shared_buffers
+                value: "{DBInstanceClassMemory/32768}"
+                applyMethod: pending-reboot
+              - name: max_connections
+                value: "LEAST({DBInstanceClassMemory/9531392},5000)"
+                applyMethod: pending-reboot
+              - name: work_mem
+                value: "65536"
+                applyMethod: immediate
+              - name: maintenance_work_mem
+                value: "524288"
+                applyMethod: immediate
+              - name: effective_cache_size
+                value: "{DBInstanceClassMemory/16384}"
+                applyMethod: immediate
+              - name: log_min_duration_statement
+                value: "1000"  # Log queries taking > 1s
+                applyMethod: immediate
+              - name: log_checkpoints
+                value: "1"
+                applyMethod: immediate
+              - name: log_connections
+                value: "1"
+                applyMethod: immediate
+              - name: log_disconnections
+                value: "1"
+                applyMethod: immediate
+              - name: log_lock_waits
+                value: "1"
+                applyMethod: immediate
+              - name: idle_in_transaction_session_timeout
+                value: "300000"  # 5 minutes in ms
+                applyMethod: immediate
+              - name: statement_timeout
+                value: "30000"   # 30 seconds
+                applyMethod: immediate
+      patches:
+        - fromFieldPath: "metadata.name"
+          toFieldPath: "metadata.name"
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-pg15"
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.region"
+
+    # ── Security Group ─────────────────────────────────────────────────────────
+    - name: security-group
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: SecurityGroup
+        spec:
+          forProvider:
+            region: us-east-1
+            description: "Managed by Crossplane — RDS access from cluster nodes"
+            vpcIdSelector:
+              matchLabels:
+                platform.internal/type: primary
+            egress:
+              - fromPort: 0
+                toPort: 0
+                protocol: "-1"
+                cidrBlocks:
+                  - "0.0.0.0/0"
+      patches:
+        - fromFieldPath: "metadata.name"
+          toFieldPath: "metadata.name"
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-sg"
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.region"
+
+    - name: security-group-rule-postgres
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: SecurityGroupRule
+        spec:
+          forProvider:
+            region: us-east-1
+            type: ingress
+            fromPort: 5432
+            toPort: 5432
+            protocol: tcp
+            cidrBlocks:
+              - "10.0.0.0/8"  # Default — overridden by patch
+            securityGroupIdSelector:
+              matchControllerRef: true
+      patches:
+        - fromFieldPath: "spec.parameters.allowedCIDRs"
+          toFieldPath: "spec.forProvider.cidrBlocks"
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.region"
+
+    # ── RDS Instance ───────────────────────────────────────────────────────────
+    - name: db-instance
+      base:
+        apiVersion: rds.aws.upbound.io/v1beta1
+        kind: Instance
+        spec:
+          forProvider:
+            region: us-east-1
+            engine: postgres
+            engineVersion: "15.4"
+            instanceClass: db.m6g.large
+            allocatedStorage: 100
+            maxAllocatedStorage: 500        # Autoscaling cap
+            storageType: gp3
+            storageEncrypted: true
+            multiAz: true
+            publiclyAccessible: false
+            deletionProtection: true
+            backupRetentionPeriod: 7        # Days
+            preferredBackupWindow: "02:00-03:00"
+            preferredMaintenanceWindow: "sun:04:00-sun:05:00"
+            enabledCloudwatchLogsExports:
+              - postgresql
+              - upgrade
+            monitoringInterval: 60
+            performanceInsightsEnabled: true
+            performanceInsightsRetentionPeriod: 7
+            copyTagsToSnapshot: true
+            autoMinorVersionUpgrade: true
+            dbSubnetGroupNameSelector:
+              matchControllerRef: true
+            vpcSecurityGroupIdSelector:
+              matchControllerRef: true
+            parameterGroupNameSelector:
+              matchControllerRef: true
+            skipFinalSnapshot: false
+            finalSnapshotIdentifier: "PLACEHOLDER"  # Overridden by patch
+            tags:
+              managed-by: crossplane
+          writeConnectionSecretToRef:
+            namespace: crossplane-system
+            name: PLACEHOLDER  # Overridden by patch
+      patches:
+        # From XR spec.parameters
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.region"
+        - fromFieldPath: "spec.parameters.engine"
+          toFieldPath: "spec.forProvider.engine"
+        - fromFieldPath: "spec.parameters.engineVersion"
+          toFieldPath: "spec.forProvider.engineVersion"
+        - fromFieldPath: "spec.parameters.instanceClass"
+          toFieldPath: "spec.forProvider.instanceClass"
+        - fromFieldPath: "spec.parameters.allocatedStorageGB"
+          toFieldPath: "spec.forProvider.allocatedStorage"
+        - fromFieldPath: "spec.parameters.backupRetentionDays"
+          toFieldPath: "spec.forProvider.backupRetentionPeriod"
+
+        # Multi-AZ: true for production, false otherwise
+        - fromFieldPath: "spec.parameters.environment"
+          toFieldPath: "spec.forProvider.multiAz"
+          transforms:
+            - type: map
+              map:
+                production: "true"
+                staging: "false"
+                dev: "false"
+
+        # Deletion protection: only in production
+        - fromFieldPath: "spec.parameters.environment"
+          toFieldPath: "spec.forProvider.deletionProtection"
+          transforms:
+            - type: map
+              map:
+                production: "true"
+                staging: "false"
+                dev: "false"
+
+        # Final snapshot identifier
+        - fromFieldPath: "metadata.name"
+          toFieldPath: "spec.forProvider.finalSnapshotIdentifier"
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-final"
+
+        # Connection secret routing
+        - fromFieldPath: "spec.writeConnectionSecretToRef.namespace"
+          toFieldPath: "spec.writeConnectionSecretToRef.namespace"
+        - fromFieldPath: "metadata.name"
+          toFieldPath: "spec.writeConnectionSecretToRef.name"
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-rds-creds"
+
+        # Tags
+        - fromFieldPath: "spec.parameters.environment"
+          toFieldPath: "spec.forProvider.tags.environment"
+        - fromFieldPath: "metadata.name"
+          toFieldPath: "spec.forProvider.tags.Name"
+
+      connectionDetails:
+        - name: username
+          fromConnectionSecretKey: username
+        - name: password
+          fromConnectionSecretKey: password
+        - name: endpoint
+          fromConnectionSecretKey: endpoint
+        - name: port
+          fromConnectionSecretKey: port
+
+---
+##
+## XRD — defines the self-service API surface for platform consumers
+##
+
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xrdsinstances.platform.internal
+spec:
+  group: platform.internal
+  names:
+    kind: XRDSInstance
+    plural: xrdsinstances
+  claimNames:
+    kind: RDSInstance
+    plural: rdsinstances
+
+  connectionSecretKeys:
+    - username
+    - password
+    - endpoint
+    - port
+
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [parameters]
+              properties:
+                parameters:
+                  type: object
+                  required: [instanceClass, environment]
+                  properties:
+                    region:
+                      type: string
+                      default: us-east-1
+                      description: AWS region
+                    engine:
+                      type: string
+                      default: postgres
+                      enum: [postgres, mysql, mariadb]
+                    engineVersion:
+                      type: string
+                      default: "15.4"
+                    instanceClass:
+                      type: string
+                      description: "RDS instance class (e.g. db.m6g.large)"
+                    allocatedStorageGB:
+                      type: integer
+                      default: 100
+                      minimum: 20
+                      maximum: 65536
+                    backupRetentionDays:
+                      type: integer
+                      default: 7
+                      minimum: 1
+                      maximum: 35
+                    environment:
+                      type: string
+                      enum: [production, staging, dev]
+                    allowedCIDRs:
+                      type: array
+                      items:
+                        type: string
+                      default: ["10.0.0.0/8"]
+                      description: "CIDRs allowed to connect to port 5432"
