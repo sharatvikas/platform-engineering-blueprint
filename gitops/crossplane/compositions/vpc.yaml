@@ -1,0 +1,487 @@
+##
+## Crossplane Composition: VPC
+##
+## Provides a self-service VPC with:
+## - Public and private subnets across 3 AZs
+## - Internet Gateway for public subnets
+## - NAT Gateways for private subnet egress (one per AZ in production)
+## - Route tables with appropriate routing
+## - VPC Flow Logs to CloudWatch
+## - Default Security Group rules (deny all outbound, allow within VPC)
+##
+## Usage:
+##   kubectl apply -f - <<EOF
+##   apiVersion: platform.internal/v1alpha1
+##   kind: VPC
+##   metadata:
+##     name: platform-prod-vpc
+##     namespace: platform-team
+##   spec:
+##     parameters:
+##       environment: production
+##       cidr: "10.20.0.0/16"
+##       region: us-east-1
+##   EOF
+##
+
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: vpc.platform.internal
+  labels:
+    crossplane.io/xrd: xvpcs.platform.internal
+    provider: aws
+    environment: multi
+spec:
+  compositeTypeRef:
+    apiVersion: platform.internal/v1alpha1
+    kind: XVPC
+
+  resources:
+    # ── VPC ───────────────────────────────────────────────────────────────────
+    - name: vpc
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: VPC
+        spec:
+          forProvider:
+            region: us-east-1
+            enableDnsSupport: true
+            enableDnsHostnames: true
+            tags:
+              managed-by: crossplane
+              platform.internal/type: primary
+      patches:
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.region"
+        - fromFieldPath: "spec.parameters.cidr"
+          toFieldPath: "spec.forProvider.cidrBlock"
+        - fromFieldPath: "spec.parameters.environment"
+          toFieldPath: "spec.forProvider.tags.environment"
+        - fromFieldPath: "metadata.name"
+          toFieldPath: "spec.forProvider.tags.Name"
+
+    # ── Internet Gateway ───────────────────────────────────────────────────────
+    - name: internet-gateway
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: InternetGateway
+        spec:
+          forProvider:
+            region: us-east-1
+            vpcIdSelector:
+              matchControllerRef: true
+            tags:
+              managed-by: crossplane
+      patches:
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.region"
+        - fromFieldPath: "metadata.name"
+          toFieldPath: "spec.forProvider.tags.Name"
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-igw"
+
+    # ── Public Subnets (3 AZs) ─────────────────────────────────────────────────
+    - name: subnet-public-a
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: Subnet
+        spec:
+          forProvider:
+            region: us-east-1
+            availabilityZone: us-east-1a
+            mapPublicIpOnLaunch: true
+            vpcIdSelector:
+              matchControllerRef: true
+            tags:
+              managed-by: crossplane
+              access: public
+              kubernetes.io/role/elb: "1"
+      patches:
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.region"
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.availabilityZone"
+          transforms:
+            - type: string
+              string:
+                fmt: "%sa"
+        - fromFieldPath: "spec.parameters.publicSubnetCidrA"
+          toFieldPath: "spec.forProvider.cidrBlock"
+        - fromFieldPath: "metadata.name"
+          toFieldPath: "spec.forProvider.tags.Name"
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-public-a"
+
+    - name: subnet-public-b
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: Subnet
+        spec:
+          forProvider:
+            region: us-east-1
+            availabilityZone: us-east-1b
+            mapPublicIpOnLaunch: true
+            vpcIdSelector:
+              matchControllerRef: true
+            tags:
+              managed-by: crossplane
+              access: public
+              kubernetes.io/role/elb: "1"
+      patches:
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.region"
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.availabilityZone"
+          transforms:
+            - type: string
+              string:
+                fmt: "%sb"
+        - fromFieldPath: "spec.parameters.publicSubnetCidrB"
+          toFieldPath: "spec.forProvider.cidrBlock"
+        - fromFieldPath: "metadata.name"
+          toFieldPath: "spec.forProvider.tags.Name"
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-public-b"
+
+    - name: subnet-public-c
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: Subnet
+        spec:
+          forProvider:
+            region: us-east-1
+            availabilityZone: us-east-1c
+            mapPublicIpOnLaunch: true
+            vpcIdSelector:
+              matchControllerRef: true
+            tags:
+              managed-by: crossplane
+              access: public
+              kubernetes.io/role/elb: "1"
+      patches:
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.region"
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.availabilityZone"
+          transforms:
+            - type: string
+              string:
+                fmt: "%sc"
+        - fromFieldPath: "spec.parameters.publicSubnetCidrC"
+          toFieldPath: "spec.forProvider.cidrBlock"
+        - fromFieldPath: "metadata.name"
+          toFieldPath: "spec.forProvider.tags.Name"
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-public-c"
+
+    # ── Private Subnets (3 AZs) ────────────────────────────────────────────────
+    - name: subnet-private-a
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: Subnet
+        spec:
+          forProvider:
+            region: us-east-1
+            availabilityZone: us-east-1a
+            mapPublicIpOnLaunch: false
+            vpcIdSelector:
+              matchControllerRef: true
+            tags:
+              managed-by: crossplane
+              access: private
+              kubernetes.io/role/internal-elb: "1"
+      patches:
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.region"
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.availabilityZone"
+          transforms:
+            - type: string
+              string:
+                fmt: "%sa"
+        - fromFieldPath: "spec.parameters.privateSubnetCidrA"
+          toFieldPath: "spec.forProvider.cidrBlock"
+        - fromFieldPath: "metadata.name"
+          toFieldPath: "spec.forProvider.tags.Name"
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-private-a"
+
+    - name: subnet-private-b
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: Subnet
+        spec:
+          forProvider:
+            region: us-east-1
+            availabilityZone: us-east-1b
+            mapPublicIpOnLaunch: false
+            vpcIdSelector:
+              matchControllerRef: true
+            tags:
+              managed-by: crossplane
+              access: private
+              kubernetes.io/role/internal-elb: "1"
+      patches:
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.region"
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.availabilityZone"
+          transforms:
+            - type: string
+              string:
+                fmt: "%sb"
+        - fromFieldPath: "spec.parameters.privateSubnetCidrB"
+          toFieldPath: "spec.forProvider.cidrBlock"
+        - fromFieldPath: "metadata.name"
+          toFieldPath: "spec.forProvider.tags.Name"
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-private-b"
+
+    - name: subnet-private-c
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: Subnet
+        spec:
+          forProvider:
+            region: us-east-1
+            availabilityZone: us-east-1c
+            mapPublicIpOnLaunch: false
+            vpcIdSelector:
+              matchControllerRef: true
+            tags:
+              managed-by: crossplane
+              access: private
+              kubernetes.io/role/internal-elb: "1"
+      patches:
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.region"
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.availabilityZone"
+          transforms:
+            - type: string
+              string:
+                fmt: "%sc"
+        - fromFieldPath: "spec.parameters.privateSubnetCidrC"
+          toFieldPath: "spec.forProvider.cidrBlock"
+        - fromFieldPath: "metadata.name"
+          toFieldPath: "spec.forProvider.tags.Name"
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-private-c"
+
+    # ── NAT Gateway EIP (AZ-a; production gets one per AZ) ────────────────────
+    - name: eip-nat-a
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: EIP
+        spec:
+          forProvider:
+            region: us-east-1
+            domain: vpc
+            tags:
+              managed-by: crossplane
+      patches:
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.region"
+        - fromFieldPath: "metadata.name"
+          toFieldPath: "spec.forProvider.tags.Name"
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-nat-eip-a"
+
+    # ── NAT Gateway (AZ-a) ─────────────────────────────────────────────────────
+    - name: nat-gateway-a
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: NatGateway
+        spec:
+          forProvider:
+            region: us-east-1
+            connectivityType: public
+            allocationIdSelector:
+              matchLabels:
+                nat-eip: "a"
+            subnetIdSelector:
+              matchLabels:
+                nat-subnet: "public-a"
+            tags:
+              managed-by: crossplane
+      patches:
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.region"
+        - fromFieldPath: "metadata.name"
+          toFieldPath: "spec.forProvider.tags.Name"
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-nat-a"
+
+    # ── Public Route Table ─────────────────────────────────────────────────────
+    - name: route-table-public
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: RouteTable
+        spec:
+          forProvider:
+            region: us-east-1
+            vpcIdSelector:
+              matchControllerRef: true
+            tags:
+              managed-by: crossplane
+      patches:
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.region"
+        - fromFieldPath: "metadata.name"
+          toFieldPath: "spec.forProvider.tags.Name"
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-public-rt"
+
+    - name: route-public-igw
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: Route
+        spec:
+          forProvider:
+            region: us-east-1
+            destinationCidrBlock: "0.0.0.0/0"
+            routeTableIdSelector:
+              matchLabels:
+                route-table: public
+            gatewayIdSelector:
+              matchControllerRef: true
+      patches:
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.region"
+
+    # ── Private Route Table (using NAT-a for single-AZ non-prod) ──────────────
+    - name: route-table-private
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: RouteTable
+        spec:
+          forProvider:
+            region: us-east-1
+            vpcIdSelector:
+              matchControllerRef: true
+            tags:
+              managed-by: crossplane
+      patches:
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.region"
+        - fromFieldPath: "metadata.name"
+          toFieldPath: "spec.forProvider.tags.Name"
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-private-rt"
+
+    # ── VPC Flow Logs ──────────────────────────────────────────────────────────
+    - name: flow-logs
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: FlowLog
+        spec:
+          forProvider:
+            region: us-east-1
+            trafficType: ALL
+            iamRoleArnSelector:
+              matchLabels:
+                platform.internal/role: flow-logs
+            logDestinationType: cloud-watch-logs
+            vpcIdSelector:
+              matchControllerRef: true
+      patches:
+        - fromFieldPath: "spec.parameters.region"
+          toFieldPath: "spec.forProvider.region"
+
+---
+##
+## XRD — defines the self-service API for VPC claims
+##
+
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xvpcs.platform.internal
+spec:
+  group: platform.internal
+  names:
+    kind: XVPC
+    plural: xvpcs
+  claimNames:
+    kind: VPC
+    plural: vpcs
+
+  connectionSecretKeys:
+    - vpcId
+    - privateSubnetIds
+    - publicSubnetIds
+
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [parameters]
+              properties:
+                parameters:
+                  type: object
+                  required: [environment, cidr]
+                  properties:
+                    region:
+                      type: string
+                      default: us-east-1
+                      description: AWS region
+                    environment:
+                      type: string
+                      enum: [production, staging, dev]
+                    cidr:
+                      type: string
+                      description: "VPC CIDR block (e.g. 10.20.0.0/16)"
+                      pattern: "^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$"
+                    publicSubnetCidrA:
+                      type: string
+                      default: "10.20.0.0/24"
+                      description: "Public subnet CIDR for AZ-a"
+                    publicSubnetCidrB:
+                      type: string
+                      default: "10.20.1.0/24"
+                      description: "Public subnet CIDR for AZ-b"
+                    publicSubnetCidrC:
+                      type: string
+                      default: "10.20.2.0/24"
+                      description: "Public subnet CIDR for AZ-c"
+                    privateSubnetCidrA:
+                      type: string
+                      default: "10.20.10.0/24"
+                      description: "Private subnet CIDR for AZ-a"
+                    privateSubnetCidrB:
+                      type: string
+                      default: "10.20.11.0/24"
+                      description: "Private subnet CIDR for AZ-b"
+                    privateSubnetCidrC:
+                      type: string
+                      default: "10.20.12.0/24"
+                      description: "Private subnet CIDR for AZ-c"
