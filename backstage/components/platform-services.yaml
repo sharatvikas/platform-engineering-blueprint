@@ -1,0 +1,95 @@
+##
+## Platform Services — registered in Backstage catalog
+##
+## These are the core platform infrastructure components that back the IDP.
+##
+
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: argocd
+  title: ArgoCD
+  description: GitOps continuous delivery controller managing all application deployments
+  annotations:
+    backstage.io/source-location: url:https://github.com/sharatvikas/platform-engineering-blueprint/tree/main/gitops
+    argocd/app-name: argocd
+  tags:
+    - gitops
+    - cd
+    - kubernetes
+  links:
+    - url: https://argocd.internal/
+      title: ArgoCD UI
+      icon: dashboard
+spec:
+  type: service
+  lifecycle: production
+  owner: platform-team
+  system: internal-developer-platform
+  providesApis:
+    - argocd-api
+
+---
+
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: crossplane
+  title: Crossplane
+  description: Infrastructure-as-code controller for self-service AWS provisioning (RDS, S3, VPC)
+  annotations:
+    backstage.io/source-location: url:https://github.com/sharatvikas/platform-engineering-blueprint/tree/main/gitops/crossplane
+  tags:
+    - infrastructure
+    - aws
+    - self-service
+    - crossplane
+spec:
+  type: service
+  lifecycle: production
+  owner: platform-team
+  system: internal-developer-platform
+
+---
+
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: karpenter
+  title: Karpenter
+  description: Node autoprovisioner for right-sized, cost-optimized Kubernetes nodes
+  annotations:
+    backstage.io/source-location: url:https://github.com/sharatvikas/platform-engineering-blueprint/tree/main/platform/karpenter
+  tags:
+    - kubernetes
+    - autoscaling
+    - cost-optimization
+spec:
+  type: service
+  lifecycle: production
+  owner: platform-team
+  system: internal-developer-platform
+
+---
+
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: sre-mcp-server
+  title: SRE MCP Server
+  description: MCP server exposing SRE toolchain to AI assistants (PagerDuty, Grafana, Kubernetes, runbooks)
+  annotations:
+    backstage.io/source-location: url:https://github.com/sharatvikas/sre-mcp-server
+    github.com/project-slug: sharatvikas/sre-mcp-server
+  tags:
+    - ai
+    - mcp
+    - sre
+    - observability
+spec:
+  type: service
+  lifecycle: production
+  owner: sre-team
+  system: internal-developer-platform
+  providesApis:
+    - sre-mcp-api

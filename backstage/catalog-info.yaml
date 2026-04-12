@@ -1,0 +1,31 @@
+##
+## Backstage Software Catalog root — Platform Engineering Blueprint
+##
+## This file is the entry point for the Backstage catalog. It registers
+## all components, APIs, and templates that make up the internal developer
+## platform (IDP). Import this into Backstage via:
+##
+##   Settings → Integrations → GitHub → Add Catalog URL
+##   URL: https://github.com/sharatvikas/platform-engineering-blueprint/blob/main/backstage/catalog-info.yaml
+##
+apiVersion: backstage.io/v1alpha1
+kind: Location
+metadata:
+  name: platform-engineering-blueprint
+  description: All IDP catalog entities for the platform engineering blueprint
+spec:
+  targets:
+    # Service templates — self-service scaffolding
+    - ./templates/microservice-template/template.yaml
+    - ./templates/data-pipeline-template/template.yaml
+    - ./templates/s3-bucket-template/template.yaml
+    - ./templates/rds-database-template/template.yaml
+
+    # Components — registered platform services
+    - ./components/platform-services.yaml
+
+    # APIs — OpenAPI/AsyncAPI definitions
+    - ./apis/platform-apis.yaml
+
+    # System definitions
+    - ./systems.yaml
