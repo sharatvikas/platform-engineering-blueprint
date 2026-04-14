@@ -1,0 +1,46 @@
+## PagerDuty Service configuration for ${{ values.name }}
+## Apply via the PagerDuty Kubernetes operator or Terraform pagerduty provider.
+##
+## If using the pagerduty-operator (https://github.com/openshift/pagerduty-operator):
+##   kubectl apply -f deploy/pagerduty-service.yaml
+##
+## If using Terraform, copy values into your pagerduty_service resource.
+apiVersion: pagerduty.openshift.io/v1alpha1
+kind: PagerDutyIntegration
+metadata:
+  name: ${{ values.name }}
+  namespace: pagerduty-operator
+  labels:
+    service: ${{ values.name }}
+    team: ${{ values.team }}
+    tier: ${{ values.tier }}
+spec:
+  escalationPolicy: ${{ values.team }}-escalation-policy
+  servicePrefix: ${{ values.name }}
+  # Route alerts to the team's Slack channel for acknowledgement
+  acknowledgeTimeout: 1800     # 30 minutes to ack before re-escalate
+  resolveTimeout: 14400        # 4 hours to resolve before re-escalate
+  alertGroupingTimeout: 300    # Group alerts within 5 minutes
+  alertGrouping: time
+  # Integration key stored in a Kubernetes secret created by this template
+  pagerdutyIntegrationSecretName: ${{ values.name }}-pagerduty-key
+  # Service-level metadata for runbook links in alerts
+  incidentUrgencyRule:
+    type: ${{ 'constant' if values.tier == 'tier1' else 'use_support_hours' }}
+    urgency: ${{ 'high' if values.tier == 'tier1' else 'low' }}
+
+---
+## Secret holding the PagerDuty integration key.
+## In production, populate via external-secrets or Vault.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${{ values.name }}-pagerduty-key
+  namespace: ${{ values.namespace }}
+  labels:
+    service: ${{ values.name }}
+type: Opaque
+stringData:
+  # Replace <INTEGRATION_KEY> with the key from PagerDuty console
+  # or let the Backstage scaffolder inject it from parameters.pagerduty_service_key
+  serviceKey: "${{ values.pagerduty_service_key }}"
