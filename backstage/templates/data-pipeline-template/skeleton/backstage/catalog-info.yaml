@@ -1,0 +1,24 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: ${{ values.name }}
+  title: "${{ values.name }}"
+  description: ${{ values.description }}
+  annotations:
+    github.com/project-slug: ${{ values.owner }}/${{ values.name }}
+    backstage.io/techdocs-ref: dir:.
+  tags:
+    - data-pipeline
+    - python
+    - ${{ values.pipeline_type }}
+  links:
+    - url: https://github.com/${{ values.owner }}/${{ values.name }}/actions
+      title: CI/CD
+      icon: github
+spec:
+  type: service
+  lifecycle: production
+  owner: ${{ values.owner }}
+  system: data-platform
+  dependsOn:
+    - resource:default/s3-${{ values.source_bucket }}

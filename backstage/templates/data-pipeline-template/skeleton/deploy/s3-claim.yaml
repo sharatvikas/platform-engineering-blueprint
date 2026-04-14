@@ -1,0 +1,53 @@
+{% if values.provision_output_bucket %}
+apiVersion: s3.aws.crossplane.io/v1alpha1
+kind: S3Bucket
+metadata:
+  name: ${{ values.name }}-output
+  namespace: data-pipelines
+  annotations:
+    backstage.io/component: ${{ values.name }}
+spec:
+  forProvider:
+    region: us-east-1
+    acl: private
+    versioning:
+      enabled: true
+    serverSideEncryptionConfiguration:
+      rules:
+        - applyServerSideEncryptionByDefault:
+            sseAlgorithm: AES256
+    lifecycleRules:
+      - id: expire-old-outputs
+        enabled: true
+        expiration:
+          days: 90
+        prefix: output/
+  providerConfigRef:
+    name: aws-provider
+{% endif %}
+{% if values.needs_database %}
+---
+apiVersion: database.aws.crossplane.io/v1alpha1
+kind: RDSInstance
+metadata:
+  name: ${{ values.name }}-db
+  namespace: data-pipelines
+spec:
+  forProvider:
+    region: us-east-1
+    dbInstanceClass: db.t3.micro
+    engine: postgres
+    engineVersion: "15"
+    allocatedStorage: 20
+    storageType: gp3
+    multiAZ: false
+    backupRetentionPeriod: 7
+    deletionProtection: true
+    tags:
+      - key: pipeline
+        value: ${{ values.name }}
+      - key: owner
+        value: ${{ values.owner }}
+  providerConfigRef:
+    name: aws-provider
+{% endif %}
