@@ -1,0 +1,51 @@
+##
+## SLO definition for ${{ values.name }}
+## Tier: ${{ values.tier }} | Team: ${{ values.team }}
+##
+## Apply with: kubectl apply -f slo/${{ values.name }}-slo.yaml
+## Or use the Pyrra/Sloth operator to generate recording rules and alerts.
+##
+apiVersion: pyrra.dev/v1alpha1
+kind: ServiceLevelObjective
+metadata:
+  name: ${{ values.name }}-availability
+  namespace: monitoring
+  labels:
+    service: ${{ values.name }}
+    team: ${{ values.team }}
+    tier: ${{ values.tier }}
+spec:
+  target: "${{ values.availability_target }}"
+  window: ${{ values.error_budget_window_days }}d
+  description: >
+    Availability SLO for ${{ values.name }}: at least ${{ values.availability_target }}%
+    of requests must succeed (non-5xx) over the ${{ values.error_budget_window_days }}-day window.
+  indicator:
+    ratio:
+      errors:
+        metric: http_requests_total{job="${{ values.name }}",status=~"5.."}
+      total:
+        metric: http_requests_total{job="${{ values.name }}"}
+
+---
+apiVersion: pyrra.dev/v1alpha1
+kind: ServiceLevelObjective
+metadata:
+  name: ${{ values.name }}-latency
+  namespace: monitoring
+  labels:
+    service: ${{ values.name }}
+    team: ${{ values.team }}
+    tier: ${{ values.tier }}
+spec:
+  target: "99"
+  window: ${{ values.error_budget_window_days }}d
+  description: >
+    Latency SLO for ${{ values.name }}: 99% of requests must complete
+    within ${{ values.latency_p99_ms }}ms.
+  indicator:
+    latency:
+      success:
+        metric: http_request_duration_seconds_bucket{job="${{ values.name }}",le="${{ (values.latency_p99_ms / 1000) | round(3) }}"}
+      total:
+        metric: http_request_duration_seconds_count{job="${{ values.name }}"}

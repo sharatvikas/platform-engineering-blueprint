@@ -1,0 +1,185 @@
+##
+## Backstage Software Template: SRE Service Golden Path
+##
+## Self-service template for onboarding a service into the SRE platform.
+## Scaffolds: SLO definitions, runbook, PagerDuty service, alerting rules,
+## Prometheus ServiceMonitor, and Backstage catalog registration.
+##
+## This is the golden path for ANY service that needs production reliability
+## engineering: SLOs tracked, alerts firing to the right people, runbook
+## linked from every alert, and PagerDuty integrated out of the box.
+##
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: sre-service-template
+  title: SRE Service Onboarding
+  description: >
+    Onboard a service into the SRE platform: SLO definitions, AlertManager
+    rules, PagerDuty service, runbook, and Backstage component registration.
+    Use this for any production service that needs reliability tracking.
+  tags:
+    - recommended
+    - sre
+    - slo
+    - pagerduty
+    - alerting
+    - observability
+spec:
+  owner: sre-team
+  type: service
+
+  parameters:
+    - title: Service Details
+      required: [name, owner, team, tier, description]
+      properties:
+        name:
+          title: Service Name
+          type: string
+          description: Lowercase, hyphen-separated (e.g. payments-api)
+          pattern: "^[a-z][a-z0-9-]{2,62}$"
+          ui:autofocus: true
+        owner:
+          title: Owning Team
+          type: string
+          description: GitHub team that owns this service (e.g. payments-team)
+        team:
+          title: Team Slug
+          type: string
+          description: Short team identifier for routing (e.g. payments, platform, data)
+          enum: [payments, platform, data, security, infra, ml]
+        tier:
+          title: Service Tier
+          type: string
+          description: >
+            Tier 1 — customer-facing, 99.9% SLO.
+            Tier 2 — internal critical, 99.5% SLO.
+            Tier 3 — internal non-critical, 99.0% SLO.
+          enum: [tier1, tier2, tier3]
+          enumNames:
+            - "Tier 1 — Customer-facing (99.9% SLO)"
+            - "Tier 2 — Internal Critical (99.5% SLO)"
+            - "Tier 3 — Internal Non-Critical (99.0% SLO)"
+        description:
+          title: Service Description
+          type: string
+          ui:widget: textarea
+
+    - title: SLO Configuration
+      required: [availability_target, latency_p99_ms]
+      properties:
+        availability_target:
+          title: Availability SLO (%)
+          type: number
+          description: Target availability percentage (e.g. 99.9 for three-nines)
+          default: 99.9
+          minimum: 90.0
+          maximum: 99.999
+        latency_p99_ms:
+          title: Latency SLO — p99 (ms)
+          type: integer
+          description: Target p99 latency in milliseconds
+          default: 500
+        error_budget_window_days:
+          title: Error Budget Window (days)
+          type: integer
+          description: Rolling window for error budget calculation
+          default: 30
+          enum: [7, 14, 30]
+        custom_slo:
+          title: Additional custom SLO (optional)
+          type: string
+          description: >
+            Prometheus expression for a custom SLI, e.g.
+            "sum(rate(cache_hits_total[5m])) / sum(rate(cache_requests_total[5m]))"
+
+    - title: Alerting & On-Call
+      required: [pagerduty_service_key]
+      properties:
+        pagerduty_service_key:
+          title: PagerDuty Service Integration Key
+          type: string
+          description: >
+            Integration key for the PagerDuty service. Create one in PagerDuty
+            Console → Services → Integrations → Add Integration → Events API v2.
+          ui:field: Secret
+        oncall_schedule_id:
+          title: PagerDuty On-Call Schedule ID (optional)
+          type: string
+          description: Override the default team on-call schedule
+        slack_channel:
+          title: Slack Alert Channel
+          type: string
+          description: Channel for non-critical alerts (e.g. #payments-alerts)
+          default: "#sre-alerts"
+        alert_runbook_url:
+          title: Runbook Base URL (optional)
+          type: string
+          description: >
+            Base URL for runbook links in alerts. If blank, the auto-generated
+            runbook in this repo will be used.
+
+    - title: Kubernetes
+      required: [namespace]
+      properties:
+        namespace:
+          title: Kubernetes Namespace
+          type: string
+          description: Primary namespace where the service runs
+          default: production
+        service_port:
+          title: Service HTTP Port
+          type: integer
+          default: 8080
+        metrics_path:
+          title: Prometheus Metrics Path
+          type: string
+          default: /metrics
+
+  steps:
+    - id: fetch-skeleton
+      name: Fetch SRE skeleton
+      action: fetch:template
+      input:
+        url: ./skeleton
+        values:
+          name: ${{ parameters.name }}
+          owner: ${{ parameters.owner }}
+          team: ${{ parameters.team }}
+          tier: ${{ parameters.tier }}
+          description: ${{ parameters.description }}
+          availability_target: ${{ parameters.availability_target }}
+          latency_p99_ms: ${{ parameters.latency_p99_ms }}
+          error_budget_window_days: ${{ parameters.error_budget_window_days }}
+          custom_slo: ${{ parameters.custom_slo }}
+          pagerduty_service_key: ${{ parameters.pagerduty_service_key }}
+          slack_channel: ${{ parameters.slack_channel | default('#sre-alerts') }}
+          namespace: ${{ parameters.namespace }}
+          service_port: ${{ parameters.service_port | default(8080) }}
+          metrics_path: ${{ parameters.metrics_path | default('/metrics') }}
+
+    - id: publish
+      name: Create SRE config in gitops repo
+      action: publish:github
+      input:
+        allowedHosts: ["github.com"]
+        description: "SRE onboarding config for ${{ parameters.name }}"
+        repoUrl: "github.com?repo=sre-configs&owner=${{ parameters.owner }}"
+        defaultBranch: main
+        sourcePath: .
+        targetPath: services/${{ parameters.name }}
+
+    - id: register
+      name: Register in Backstage catalog
+      action: catalog:register
+      input:
+        repoContentsUrl: ${{ steps.publish.output.repoContentsUrl }}
+        catalogInfoPath: /catalog-info.yaml
+
+  output:
+    links:
+      - title: SRE Configuration
+        url: ${{ steps.publish.output.remoteUrl }}
+      - title: Service in Backstage
+        icon: catalog
+        entityRef: ${{ steps.register.output.entityRef }}

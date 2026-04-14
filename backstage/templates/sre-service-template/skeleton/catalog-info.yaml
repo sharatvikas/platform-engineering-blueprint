@@ -1,0 +1,26 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: ${{ values.name }}
+  description: ${{ values.description }}
+  annotations:
+    github.com/project-slug: ${{ values.owner }}/${{ values.name }}
+    pagerduty.com/service-id: ${{ values.name }}-pagerduty
+    backstage.io/techdocs-ref: dir:.
+  labels:
+    sre-tier: ${{ values.tier }}
+    team: ${{ values.team }}
+  links:
+    - url: runbooks/${{ values.name }}.md
+      title: Runbook
+      icon: docs
+    - url: slo/${{ values.name }}-slo.yaml
+      title: SLO Definition
+      icon: dashboard
+spec:
+  type: service
+  lifecycle: production
+  owner: ${{ values.owner }}
+  system: ${{ values.team }}-platform
+  providesApis: []
+  consumesApis: []

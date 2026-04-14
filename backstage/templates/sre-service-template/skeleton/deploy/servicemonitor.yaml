@@ -1,0 +1,29 @@
+## Prometheus ServiceMonitor for ${{ values.name }}
+## Tells Prometheus Operator to scrape this service's metrics endpoint.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: ${{ values.name }}
+  namespace: ${{ values.namespace }}
+  labels:
+    app: ${{ values.name }}
+    team: ${{ values.team }}
+    # This label must match the Prometheus Operator's serviceMonitorSelector
+    prometheus: kube-prometheus
+spec:
+  selector:
+    matchLabels:
+      app: ${{ values.name }}
+  endpoints:
+    - port: http
+      path: ${{ values.metrics_path }}
+      interval: 15s
+      scrapeTimeout: 10s
+      honorLabels: false
+      metricRelabelings:
+        # Add service label to every metric for easier filtering
+        - targetLabel: service
+          replacement: ${{ values.name }}
+  namespaceSelector:
+    matchNames:
+      - ${{ values.namespace }}
