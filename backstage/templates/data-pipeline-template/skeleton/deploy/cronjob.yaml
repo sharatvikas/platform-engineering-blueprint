@@ -1,0 +1,51 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ${{ values.name }}
+  namespace: data-pipelines
+  labels:
+    app: ${{ values.name }}
+    owner: ${{ values.owner }}
+    backstage.io/component: ${{ values.name }}
+spec:
+  schedule: "${{ values.schedule }}"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 3600
+      template:
+        metadata:
+          labels:
+            app: ${{ values.name }}
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: data-pipeline-sa
+          containers:
+            - name: pipeline
+              image: ghcr.io/${{ values.owner }}/${{ values.name }}:latest
+              imagePullPolicy: Always
+              env:
+                - name: SOURCE_BUCKET
+                  valueFrom:
+                    secretKeyRef:
+                      name: ${{ values.name }}-config
+                      key: source_bucket
+                - name: OUTPUT_BUCKET
+                  valueFrom:
+                    secretKeyRef:
+                      name: ${{ values.name }}-config
+                      key: output_bucket
+                - name: AWS_REGION
+                  value: us-east-1
+                - name: RUN_DATE
+                  value: ""  # injected at runtime by wrapper script
+              resources:
+                requests:
+                  cpu: 250m
+                  memory: 512Mi
+                limits:
+                  cpu: "1"
+                  memory: 2Gi
