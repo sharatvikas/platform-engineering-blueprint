@@ -1,0 +1,14 @@
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+
+# Lock files are committed for root modules (envs/), not reusable modules
+terraform/modules/**/.terraform.lock.hcl
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

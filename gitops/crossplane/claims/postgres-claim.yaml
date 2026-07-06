@@ -1,0 +1,48 @@
+##
+## EXAMPLE CLAIM — what a product team commits to their own repo.
+##
+## This is the entire interface a developer sees: ~20 lines of YAML gets a
+## production-grade, Multi-AZ, encrypted PostgreSQL instance with tuned
+## parameters, enhanced monitoring, and locked-down networking (see
+## gitops/crossplane/compositions/rds-instance.yaml for what actually
+## gets provisioned).
+##
+## Connection credentials land in the `payments-db-conn` Secret in the
+## team's namespace — mount it, done:
+##
+##   env:
+##     - name: DATABASE_HOST
+##       valueFrom: { secretKeyRef: { name: payments-db-conn, key: endpoint } }
+##     - name: DATABASE_PASSWORD
+##       valueFrom: { secretKeyRef: { name: payments-db-conn, key: password } }
+##
+## NOTE: this directory is excluded from ArgoCD sync (see
+## gitops/argocd/apps/crossplane-config.yaml) — these files are reference
+## examples, not live resources.
+##
+apiVersion: platform.internal/v1alpha1
+kind: RDSInstance
+metadata:
+  name: payments-db
+  namespace: team-payments
+  labels:
+    team: payments
+    cost-center: fintech
+spec:
+  parameters:
+    region: us-east-1
+    engine: postgres
+    engineVersion: "15.4"
+    instanceClass: db.m6g.large
+    allocatedStorageGB: 100
+    backupRetentionDays: 14
+    environment: production   # drives Multi-AZ + deletion protection
+    allowedCIDRs:
+      - "10.0.0.0/20"         # private subnet AZ-a (see vpc module layout)
+      - "10.0.16.0/20"        # private subnet AZ-b
+      - "10.0.32.0/20"        # private subnet AZ-c
+  compositionSelector:
+    matchLabels:
+      provider: aws
+  writeConnectionSecretToRef:
+    name: payments-db-conn

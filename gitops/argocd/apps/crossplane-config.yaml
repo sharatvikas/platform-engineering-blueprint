@@ -1,0 +1,40 @@
+##
+## Crossplane configuration layer: Providers, ProviderConfig, XRDs,
+## Compositions. Synced after Crossplane core (wave 2) is healthy.
+## Example claims under gitops/crossplane/claims/ are documentation for
+## teams and are deliberately excluded from sync.
+##
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: crossplane-config
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  project: platform
+  source:
+    repoURL: https://github.com/sharatvikas/platform-engineering-blueprint
+    targetRevision: HEAD
+    path: gitops/crossplane
+    directory:
+      recurse: true
+      exclude: "{claims/**,backstage/**}"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: crossplane-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
+      # XRDs/Compositions reference CRDs installed by provider packages;
+      # skip dry-run so the first sync doesn't fail on missing CRDs
+      - SkipDryRunOnMissingResource=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m

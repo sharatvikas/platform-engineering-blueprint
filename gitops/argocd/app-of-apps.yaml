@@ -10,7 +10,11 @@ metadata:
     # Changes to this file trigger ArgoCD to reconcile the entire platform.
     argocd.argoproj.io/sync-wave: "-10"
 spec:
-  project: platform
+  # Built-in `default` project — the root app is applied by Terraform at
+  # bootstrap, before the `platform` AppProject exists. Child Applications
+  # (including platform-projects, which creates the AppProjects) are all
+  # scoped to restricted projects.
+  project: default
   source:
     repoURL: https://github.com/sharatvikas/platform-engineering-blueprint
     targetRevision: HEAD

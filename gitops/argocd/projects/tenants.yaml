@@ -1,0 +1,56 @@
+##
+## AppProject: tenants
+##
+## For product-team workloads and Crossplane claims scaffolded by Backstage.
+## Deliberately restrictive: no cluster-scoped resources, only team
+## namespaces, only namespaced Crossplane claims (never XRs or Providers).
+##
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: tenants
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-6"
+spec:
+  description: Product team applications and self-service infrastructure claims
+
+  sourceRepos:
+    # Backstage-scaffolded service repos live under the org
+    - https://github.com/sharatvikas/*
+
+  destinations:
+    # Team namespaces follow the team-* convention; platform namespaces excluded
+    - server: https://kubernetes.default.svc
+      namespace: "team-*"
+    - server: https://kubernetes.default.svc
+      namespace: "app-*"
+
+  # Tenants may NOT create cluster-scoped resources
+  clusterResourceWhitelist: []
+
+  namespaceResourceBlacklist:
+    # Prevent tenants from tampering with quotas and network isolation
+    - group: ""
+      kind: ResourceQuota
+    - group: ""
+      kind: LimitRange
+    - group: networking.k8s.io
+      kind: NetworkPolicy
+
+  roles:
+    - name: tenant-admin
+      description: Team leads — manage their own applications
+      policies:
+        - p, proj:tenants:tenant-admin, applications, *, tenants/*, allow
+      groups:
+        - engineering-leads
+
+    - name: tenant-developer
+      description: Developers — sync and inspect, no delete
+      policies:
+        - p, proj:tenants:tenant-developer, applications, get, tenants/*, allow
+        - p, proj:tenants:tenant-developer, applications, sync, tenants/*, allow
+        - p, proj:tenants:tenant-developer, logs, get, tenants/*, allow
+      groups:
+        - engineering

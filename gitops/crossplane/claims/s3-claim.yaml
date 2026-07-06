@@ -1,0 +1,31 @@
+##
+## EXAMPLE CLAIM — self-service S3 bucket for a product team.
+##
+## Provisions a bucket with public access blocked, SSE encryption,
+## versioning, and Glacier lifecycle — the team only picks the knobs below.
+## Bucket name/ARN/region are written to the `invoice-archive-conn` Secret.
+##
+## NOTE: reference example only — this directory is excluded from ArgoCD
+## sync (see gitops/argocd/apps/crossplane-config.yaml).
+##
+apiVersion: platform.internal/v1alpha1
+kind: S3Bucket
+metadata:
+  name: invoice-archive
+  namespace: team-billing
+  labels:
+    team: billing
+    cost-center: fintech
+spec:
+  parameters:
+    region: us-east-1
+    environment: production
+    versioning: true
+    lifecycleDays: 180        # invoices → Glacier after 6 months
+    corsAllowedOrigins:
+      - https://billing.internal.example.com
+  compositionSelector:
+    matchLabels:
+      provider: aws
+  writeConnectionSecretToRef:
+    name: invoice-archive-conn

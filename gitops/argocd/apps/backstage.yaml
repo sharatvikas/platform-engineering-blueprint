@@ -1,0 +1,66 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: backstage
+  namespace: argocd
+  annotations:
+    # Last wave — depends on ingress (1), monitoring (2), and crossplane
+    # config (3) for the scaffolder's infrastructure templates to work
+    argocd.argoproj.io/sync-wave: "4"
+spec:
+  project: platform
+  source:
+    repoURL: https://backstage.github.io/charts
+    chart: backstage
+    targetRevision: "1.9.6"
+    helm:
+      values: |
+        backstage:
+          image:
+            registry: ghcr.io
+            repository: backstage/backstage
+            tag: latest
+          extraEnvVarsSecrets:
+            - backstage-secrets   # GITHUB_TOKEN, POSTGRES_PASSWORD, ARGOCD_AUTH_TOKEN
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+          readinessProbe:
+            httpGet:
+              path: /healthcheck
+              port: 7007
+            initialDelaySeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthcheck
+              port: 7007
+            initialDelaySeconds: 30
+        ingress:
+          enabled: true
+          className: nginx
+          host: backstage.internal.example.com
+        postgresql:
+          enabled: true
+          auth:
+            existingSecret: backstage-secrets
+          primary:
+            persistence:
+              enabled: true
+              storageClass: gp3
+              size: 20Gi
+        serviceMonitor:
+          enabled: true
+          path: /metrics
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: backstage
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

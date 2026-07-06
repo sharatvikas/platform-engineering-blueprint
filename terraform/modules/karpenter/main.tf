@@ -61,9 +61,9 @@ data "aws_iam_policy_document" "karpenter_controller" {
   }
 
   statement {
-    sid    = "ConditionalEC2Termination"
-    effect = "Allow"
-    actions = ["ec2:TerminateInstances"]
+    sid       = "ConditionalEC2Termination"
+    effect    = "Allow"
+    actions   = ["ec2:TerminateInstances"]
     resources = ["*"]
     condition {
       test     = "StringLike"

@@ -21,6 +21,8 @@ data "aws_region" "current" {}
 
 locals {
   cluster_name = "${var.name}-${var.environment}"
+  # Provided key, or the module-managed one
+  kms_key_arn = var.kms_key_arn != "" ? var.kms_key_arn : aws_kms_key.eks[0].arn
   tags = merge(var.tags, {
     "kubernetes.io/cluster/${local.cluster_name}" = "owned"
     "managed-by"                                  = "terraform"
@@ -48,7 +50,7 @@ resource "aws_eks_cluster" "this" {
 
   encryption_config {
     provider {
-      key_arn = var.kms_key_arn != "" ? var.kms_key_arn : aws_kms_key.eks[0].arn
+      key_arn = local.kms_key_arn
     }
     resources = ["secrets"]
   }
@@ -124,7 +126,7 @@ resource "aws_eks_node_group" "this" {
   cluster_name    = aws_eks_cluster.this.name
   node_group_name = each.key
   node_role_arn   = aws_iam_role.node.arn
-  subnet_ids      = var.private_subnet_ids
+  subnet_ids      = var.subnet_ids
 
   instance_types = each.value.instance_types
   capacity_type  = each.value.capacity_type # ON_DEMAND or SPOT
@@ -184,14 +186,14 @@ resource "aws_launch_template" "nodes" {
       volume_size           = each.value.disk_size_gb
       volume_type           = "gp3"
       encrypted             = true
-      kms_key_id            = var.kms_key_arn != "" ? var.kms_key_arn : aws_kms_key.eks[0].arn
+      kms_key_id            = local.kms_key_arn
       delete_on_termination = true
     }
   }
 
   metadata_options {
     http_endpoint               = "enabled"
-    http_tokens                 = "required"  # IMDSv2 required
+    http_tokens                 = "required" # IMDSv2 required
     http_put_response_hop_limit = 1
   }
 
@@ -246,37 +248,37 @@ resource "aws_iam_role_policy_attachment" "node_AmazonEC2ContainerRegistryReadOn
 ## Core EKS Addons
 ##
 resource "aws_eks_addon" "vpc_cni" {
-  cluster_name             = aws_eks_cluster.this.name
-  addon_name               = "vpc-cni"
-  addon_version            = var.addon_versions.vpc_cni
+  cluster_name                = aws_eks_cluster.this.name
+  addon_name                  = "vpc-cni"
+  addon_version               = var.addon_versions.vpc_cni
   resolve_conflicts_on_update = "OVERWRITE"
-  tags                     = local.tags
+  tags                        = local.tags
 }
 
 resource "aws_eks_addon" "coredns" {
-  cluster_name             = aws_eks_cluster.this.name
-  addon_name               = "coredns"
-  addon_version            = var.addon_versions.coredns
+  cluster_name                = aws_eks_cluster.this.name
+  addon_name                  = "coredns"
+  addon_version               = var.addon_versions.coredns
   resolve_conflicts_on_update = "OVERWRITE"
-  tags                     = local.tags
-  depends_on               = [aws_eks_node_group.this]
+  tags                        = local.tags
+  depends_on                  = [aws_eks_node_group.this]
 }
 
 resource "aws_eks_addon" "kube_proxy" {
-  cluster_name             = aws_eks_cluster.this.name
-  addon_name               = "kube-proxy"
-  addon_version            = var.addon_versions.kube_proxy
+  cluster_name                = aws_eks_cluster.this.name
+  addon_name                  = "kube-proxy"
+  addon_version               = var.addon_versions.kube_proxy
   resolve_conflicts_on_update = "OVERWRITE"
-  tags                     = local.tags
+  tags                        = local.tags
 }
 
 resource "aws_eks_addon" "ebs_csi_driver" {
-  cluster_name             = aws_eks_cluster.this.name
-  addon_name               = "aws-ebs-csi-driver"
-  addon_version            = var.addon_versions.ebs_csi_driver
-  service_account_role_arn = aws_iam_role.ebs_csi_driver.arn
+  cluster_name                = aws_eks_cluster.this.name
+  addon_name                  = "aws-ebs-csi-driver"
+  addon_version               = var.addon_versions.ebs_csi_driver
+  service_account_role_arn    = aws_iam_role.ebs_csi_driver.arn
   resolve_conflicts_on_update = "OVERWRITE"
-  tags                     = local.tags
+  tags                        = local.tags
 }
 
 ##
@@ -315,8 +317,8 @@ resource "aws_iam_role_policy_attachment" "ebs_csi_driver" {
 ##
 resource "aws_cloudwatch_log_group" "cluster" {
   name              = "/aws/eks/${local.cluster_name}/cluster"
-  retention_in_days = var.log_retention_days
-  kms_key_id        = var.kms_key_arn != "" ? var.kms_key_arn : aws_kms_key.eks[0].arn
+  retention_in_days = var.cluster_log_retention_days
+  kms_key_id        = local.kms_key_arn
   tags              = local.tags
 }
 

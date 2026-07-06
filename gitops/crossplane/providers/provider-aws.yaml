@@ -1,0 +1,93 @@
+##
+## Crossplane AWS provider installation.
+##
+## Uses the Upbound provider *family* — one small provider per AWS service
+## instead of the 4GB monolith. Each provider below backs resources used by
+## our Compositions:
+##   - ec2 → SecurityGroup/SecurityGroupRule (rds-instance), VPC composition
+##   - rds → SubnetGroup/ParameterGroup/Instance (rds-instance)
+##   - s3  → Bucket* resources (s3-bucket)
+##   - iam → roles for the eks-cluster composition
+##
+## Auth: IRSA. The provider pods run under the `provider-aws` service
+## account, which the eks-cluster Terraform module binds to an IAM role via
+## the cluster OIDC provider. No static credentials anywhere.
+##
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-aws-ec2
+spec:
+  package: xpkg.upbound.io/upbound/provider-aws-ec2:v1.4.0
+  runtimeConfigRef:
+    name: provider-aws
+  revisionActivationPolicy: Automatic
+  revisionHistoryLimit: 3
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-aws-rds
+spec:
+  package: xpkg.upbound.io/upbound/provider-aws-rds:v1.4.0
+  runtimeConfigRef:
+    name: provider-aws
+  revisionActivationPolicy: Automatic
+  revisionHistoryLimit: 3
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-aws-s3
+spec:
+  package: xpkg.upbound.io/upbound/provider-aws-s3:v1.4.0
+  runtimeConfigRef:
+    name: provider-aws
+  revisionActivationPolicy: Automatic
+  revisionHistoryLimit: 3
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: provider-aws-iam
+spec:
+  package: xpkg.upbound.io/upbound/provider-aws-iam:v1.4.0
+  runtimeConfigRef:
+    name: provider-aws
+  revisionActivationPolicy: Automatic
+  revisionHistoryLimit: 3
+---
+##
+## Shared runtime config — pins provider pods to the IRSA service account
+## and gives them production resource limits.
+##
+apiVersion: pkg.crossplane.io/v1beta1
+kind: DeploymentRuntimeConfig
+metadata:
+  name: provider-aws
+spec:
+  serviceAccountTemplate:
+    metadata:
+      name: provider-aws
+      annotations:
+        # Role created by terraform/modules/eks-cluster (IRSA)
+        eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/crossplane-provider-aws
+  deploymentTemplate:
+    spec:
+      selector: {}
+      template:
+        spec:
+          containers:
+            - name: package-runtime
+              args:
+                - --enable-management-policies
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  memory: 1Gi
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault

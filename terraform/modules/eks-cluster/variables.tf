@@ -67,15 +67,15 @@ variable "node_groups" {
   }
 }
 
-variable "cluster_addons" {
-  description = "EKS managed addons to install (map of addon_name → version, empty string = latest)"
-  type        = map(string)
-  default = {
-    vpc-cni            = ""
-    coredns            = ""
-    kube-proxy         = ""
-    aws-ebs-csi-driver = ""
-  }
+variable "addon_versions" {
+  description = "Pinned versions for EKS managed addons (null = latest compatible)"
+  type = object({
+    vpc_cni        = optional(string)
+    coredns        = optional(string)
+    kube_proxy     = optional(string)
+    ebs_csi_driver = optional(string)
+  })
+  default = {}
 }
 
 variable "kms_key_arn" {

@@ -1,0 +1,27 @@
+##
+## Syncs AppProject definitions before anything else (wave -5).
+## Lives in the built-in `default` project to break the chicken-and-egg:
+## the `platform` project must exist before Applications referencing it sync.
+##
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-projects
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/sharatvikas/platform-engineering-blueprint
+    targetRevision: HEAD
+    path: gitops/argocd/projects
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true

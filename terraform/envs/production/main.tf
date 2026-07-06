@@ -54,11 +54,15 @@ module "vpc" {
   vpc_cidr     = "10.0.0.0/16"
   az_count     = 3
 
-  single_nat_gateway   = false  # HA NAT for production
+  nat_strategy         = "per-az" # HA NAT for production
   create_intra_subnets = true
-  enable_flow_logs     = true
+
+  enable_flow_logs         = true
+  flow_logs_retention_days = 90 # compliance retention for production
+
   enable_s3_endpoint   = true
   enable_ecr_endpoints = true
+  enable_sts_endpoint  = true
 
   tags = {
     Environment = "production"
@@ -69,7 +73,8 @@ module "vpc" {
 module "eks" {
   source = "../../modules/eks-cluster"
 
-  cluster_name       = local.cluster_name
+  name               = "sovrn" # cluster name becomes sovrn-production
+  environment        = "production"
   kubernetes_version = "1.29"
   subnet_ids         = module.vpc.private_subnet_ids
   vpc_id             = module.vpc.vpc_id
@@ -77,6 +82,7 @@ module "eks" {
   node_groups = {
     system = {
       instance_types = ["m6i.xlarge"]
+      capacity_type  = "ON_DEMAND"
       min_size       = 2
       max_size       = 4
       desired_size   = 2
@@ -107,12 +113,30 @@ module "karpenter" {
   depends_on = [module.eks]
 }
 
-# ── Karpenter Helm release ────────────────────────────────────────────────────
+# ── Kubernetes / Helm providers ──────────────────────────────────────────────
+# Exec-based auth: tokens are minted per-operation via `aws eks get-token`,
+# so they never expire mid-apply and never land in state.
 provider "helm" {
   kubernetes {
     host                   = module.eks.cluster_endpoint
     cluster_ca_certificate = base64decode(module.eks.cluster_ca_certificate)
-    token                  = module.eks.cluster_token
+
+    exec {
+      api_version = "client.authentication.k8s.io/v1beta1"
+      command     = "aws"
+      args        = ["eks", "get-token", "--cluster-name", module.eks.cluster_name, "--region", var.aws_region]
+    }
+  }
+}
+
+provider "kubernetes" {
+  host                   = module.eks.cluster_endpoint
+  cluster_ca_certificate = base64decode(module.eks.cluster_ca_certificate)
+
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["eks", "get-token", "--cluster-name", module.eks.cluster_name, "--region", var.aws_region]
   }
 }
 
@@ -168,7 +192,7 @@ resource "helm_release" "argocd" {
       }
       configs = {
         params = {
-          "server.insecure" = true  # TLS terminated at ingress
+          "server.insecure" = true # TLS terminated at ingress
         }
       }
     })
@@ -179,6 +203,6 @@ resource "helm_release" "argocd" {
 
 # Bootstrap the App-of-Apps after ArgoCD is ready
 resource "kubernetes_manifest" "platform_root_app" {
-  manifest = yamldecode(file("${path.module}/../../../gitops/argocd/app-of-apps.yaml"))
+  manifest   = yamldecode(file("${path.module}/../../../gitops/argocd/app-of-apps.yaml"))
   depends_on = [helm_release.argocd]
 }

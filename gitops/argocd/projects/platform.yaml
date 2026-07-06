@@ -1,0 +1,79 @@
+##
+## AppProject: platform
+##
+## Owns every platform-layer Application (ingress, monitoring, crossplane,
+## backstage). Cluster-scoped resources are allowed because platform
+## components install CRDs, ClusterRoles, and webhooks.
+##
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: platform
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-6"
+spec:
+  description: Core platform components — managed by the platform team only
+
+  sourceRepos:
+    # Platform GitOps repo
+    - https://github.com/sharatvikas/platform-engineering-blueprint
+    # Pinned Helm registries used by child Applications
+    - https://charts.jetstack.io
+    - https://kubernetes.github.io/ingress-nginx
+    - https://prometheus-community.github.io/helm-charts
+    - https://charts.crossplane.io/stable
+    - https://backstage.github.io/charts
+
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: "*"
+
+  # Platform components legitimately create CRDs, ClusterRoles, webhooks
+  clusterResourceWhitelist:
+    - group: "*"
+      kind: "*"
+
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"
+
+  # Keep ArgoCD from pruning shared CRDs out from under other apps
+  orphanedResources:
+    warn: true
+
+  roles:
+    # Full control — platform team via SSO group
+    - name: platform-admin
+      description: Platform team — full application lifecycle
+      policies:
+        - p, proj:platform:platform-admin, applications, *, platform/*, allow
+        - p, proj:platform:platform-admin, repositories, *, platform/*, allow
+        - p, proj:platform:platform-admin, exec, create, platform/*, allow
+      groups:
+        - platform-team
+
+    # Sync-only — CI service account used by promotion workflows
+    - name: ci-deployer
+      description: CI pipeline — may sync but not delete or override
+      policies:
+        - p, proj:platform:ci-deployer, applications, get, platform/*, allow
+        - p, proj:platform:ci-deployer, applications, sync, platform/*, allow
+
+    # Read-only — everyone else in engineering
+    - name: platform-viewer
+      description: Read-only visibility for all engineers
+      policies:
+        - p, proj:platform:platform-viewer, applications, get, platform/*, allow
+        - p, proj:platform:platform-viewer, logs, get, platform/*, allow
+      groups:
+        - engineering
+
+  syncWindows:
+    # Block automated production syncs during the Friday-evening freeze
+    - kind: deny
+      schedule: "0 17 * * 5"
+      duration: 63h # Fri 17:00 → Mon 08:00
+      applications:
+        - "*"
+      manualSync: true # break-glass: humans can still sync

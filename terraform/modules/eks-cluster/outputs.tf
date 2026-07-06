@@ -26,12 +26,12 @@ output "cluster_version" {
 
 output "oidc_provider_arn" {
   description = "OIDC provider ARN — required by Karpenter module and any IRSA roles"
-  value       = aws_iam_openid_connect_provider.this.arn
+  value       = aws_iam_openid_connect_provider.cluster.arn
 }
 
 output "oidc_provider_url" {
   description = "OIDC provider URL (without https://) — used for IRSA trust policy construction"
-  value       = replace(aws_iam_openid_connect_provider.this.url, "https://", "")
+  value       = replace(aws_iam_openid_connect_provider.cluster.url, "https://", "")
 }
 
 output "cluster_security_group_id" {
@@ -39,9 +39,9 @@ output "cluster_security_group_id" {
   value       = aws_eks_cluster.this.vpc_config[0].cluster_security_group_id
 }
 
-output "node_security_group_id" {
-  description = "Additional security group applied to all managed node groups"
-  value       = aws_security_group.node.id
+output "cluster_additional_security_group_id" {
+  description = "Module-managed security group attached to the control plane"
+  value       = aws_security_group.cluster.id
 }
 
 output "cluster_role_arn" {
