@@ -33,9 +33,40 @@ env:
   AWS_REGION: us-east-1
 
 jobs:
+  # Gate: this workflow talks to live AWS via OIDC and needs a real state
+  # backend, so it can only do meaningful work when cloud credentials are
+  # configured. On a public/fork clone with no secrets there is nothing to
+  # check, so we skip (a clean no-op) instead of failing with a red X.
+  #
+  # NOTE: the `secrets` context is not available in a job-level `if:`, so we
+  # surface the secret's presence as a job output and gate downstream jobs on
+  # it. This keeps the workflow green (detect-drift shows as *skipped*) when
+  # AWS_TERRAFORM_ROLE_ARN is absent.
+  check-credentials:
+    name: Check for cloud credentials
+    runs-on: ubuntu-latest
+    outputs:
+      has-creds: ${{ steps.check.outputs.has-creds }}
+    steps:
+      - id: check
+        env:
+          AWS_TERRAFORM_ROLE_ARN: ${{ secrets.AWS_TERRAFORM_ROLE_ARN }}
+        run: |
+          if [ -n "${AWS_TERRAFORM_ROLE_ARN}" ]; then
+            echo "has-creds=true" >> "$GITHUB_OUTPUT"
+            echo "AWS credentials configured — drift detection will run."
+          else
+            echo "has-creds=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::AWS_TERRAFORM_ROLE_ARN is not set — skipping drift detection. This is expected on a public/fork clone with no cloud credentials."
+          fi
+
   detect-drift:
     name: Detect drift in ${{ inputs.environment || 'production' }}
+    needs: check-credentials
+    if: needs.check-credentials.outputs.has-creds == 'true'
     runs-on: ubuntu-latest
+    outputs:
+      drift_detected: ${{ steps.plan.outputs.drift_detected }}
     permissions:
       id-token: write       # OIDC auth to AWS
       contents: read
@@ -226,9 +257,9 @@ jobs:
 
   close-resolved-issues:
     name: Close resolved drift issues
-    needs: detect-drift
+    needs: [check-credentials, detect-drift]
     runs-on: ubuntu-latest
-    if: needs.detect-drift.outputs.drift_detected == 'false'
+    if: needs.check-credentials.outputs.has-creds == 'true' && needs.detect-drift.outputs.drift_detected == 'false'
     permissions:
       issues: write
     steps:

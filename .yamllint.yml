@@ -1,0 +1,26 @@
+# yamllint configuration for the CI validation workflow.
+#
+# We lint the real, deployable manifests (ArgoCD Applications, Crossplane
+# Compositions/Claims, Karpenter NodePools, Backstage catalog entities) for
+# syntax and gross structural problems, while staying lenient on cosmetic
+# style so the blueprint stays readable.
+#
+# Backstage template *skeletons* are intentionally ignored: they contain
+# scaffolder placeholders ("${{ ... }}" / "%{ ... }") that are rendered by the
+# Backstage scaffolder and are NOT valid standalone YAML.
+extends: relaxed
+
+ignore: |
+  **/.terraform/
+  backstage/templates/*/skeleton/
+
+rules:
+  line-length: disable
+  comments: disable
+  comments-indentation: disable
+  document-start: disable
+  trailing-spaces: disable
+  empty-lines: disable
+  indentation: disable
+  truthy:
+    check-keys: false

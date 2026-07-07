@@ -1,0 +1,88 @@
+##
+## Static validation for the platform blueprint.
+##
+## Runs on every push / PR and requires NO cloud credentials or state backend:
+##   1. terraform fmt   — canonical formatting across all HCL
+##   2. terraform init -backend=false + terraform validate — per root/module
+##   3. yamllint        — ArgoCD / Crossplane / Karpenter / Backstage manifests
+##
+## This is the workflow that gives contributors a real, always-green signal
+## that the code is well-formed. Live-infra checks live in drift-detection.yaml,
+## which is gated on credentials being present.
+##
+name: Validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TF_VERSION: "1.7.5"
+
+jobs:
+  terraform:
+    name: Terraform fmt + validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform fmt (check)
+        run: terraform fmt -check -recursive terraform
+
+      - name: Terraform init + validate (all roots and modules)
+        run: |
+          set -euo pipefail
+          # Every directory that contains .tf files but is not a .terraform
+          # cache directory is a validatable root/module.
+          DIRS=$(find terraform -type f -name '*.tf' \
+                   -not -path '*/.terraform/*' \
+                   -exec dirname {} \; | sort -u)
+
+          echo "Validating directories:"
+          echo "$DIRS"
+          echo
+
+          FAILED=0
+          for d in $DIRS; do
+            echo "::group::terraform validate — $d"
+            (
+              cd "$d"
+              # -backend=false: no remote state / no AWS credentials required.
+              terraform init -backend=false -input=false -no-color
+              terraform validate -no-color
+            ) || FAILED=1
+            echo "::endgroup::"
+          done
+
+          if [ "$FAILED" -ne 0 ]; then
+            echo "::error::One or more Terraform configurations failed validation."
+            exit 1
+          fi
+
+  yaml:
+    name: YAML lint (manifests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install yamllint
+        run: pip install yamllint
+
+      - name: Lint manifests
+        run: yamllint -c .yamllint.yml gitops backstage .github
