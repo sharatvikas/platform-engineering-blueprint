@@ -38,14 +38,14 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - name: Terraform fmt (check)
-        run: terraform fmt -check -recursive terraform
+        run: terraform fmt -check -recursive terraform bootstrap
 
       - name: Terraform init + validate (all roots and modules)
         run: |
           set -euo pipefail
           # Every directory that contains .tf files but is not a .terraform
           # cache directory is a validatable root/module.
-          DIRS=$(find terraform -type f -name '*.tf' \
+          DIRS=$(find terraform bootstrap -type f -name '*.tf' \
                    -not -path '*/.terraform/*' \
                    -exec dirname {} \; | sort -u)
 

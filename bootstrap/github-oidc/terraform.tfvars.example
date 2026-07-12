@@ -1,0 +1,35 @@
+# Copy to terraform.tfvars and edit. All values shown are the defaults —
+# uncomment/change only what you need. terraform.tfvars is gitignored.
+
+# GitHub org/user that owns the repos.
+# github_org = "sharatvikas"
+
+# Region for the DynamoDB lock table; match your Terraform backend region.
+# aws_region = "us-east-1"
+
+# ── OIDC provider ────────────────────────────────────────────────────────────
+# If your account ALREADY has a GitHub OIDC provider (only one is allowed),
+# set create_oidc_provider = false and pass its ARN:
+# create_oidc_provider       = false
+# existing_oidc_provider_arn = "arn:aws:iam::111122223333:oidc-provider/token.actions.githubusercontent.com"
+
+# ── State backend ────────────────────────────────────────────────────────────
+# Auto-generates a bucket named <github_org>-tfstate-<account_id> if left empty.
+# state_bucket_name     = ""
+# state_lock_table_name = "terraform-state-lock"
+
+# If you already have a backend, skip creation and grant the roles access to it:
+# create_state_backend           = false
+# existing_state_bucket_name     = "my-existing-tfstate-bucket"
+# existing_state_lock_table_name = "terraform-state-lock"
+
+# ── Org-reader role ────────────────────────────────────────────────────────────
+# IMPORTANT: set this to the read-only role that exists in each member account
+# that the org-reader role may assume. The default below is admin-level — change
+# it to a dedicated read-only cross-account role.
+# org_member_role_name = "OrganizationAccountAccessRole"
+
+# Extra tags applied to every resource.
+# tags = {
+#   Owner = "sarat"
+# }
