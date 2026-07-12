@@ -13,13 +13,19 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 locals {
-  # Repo → the `sub` condition value its role trusts. Tighten these to e.g.
-  # "repo:${var.github_org}/<repo>:ref:refs/heads/main" or
-  # "repo:${var.github_org}/<repo>:environment:prod" before production use.
+  # `sub` suffix derived from var.trusted_git_ref:
+  #   ""               -> "*"                    (any ref/branch/PR/env — scaffold default)
+  #   "refs/heads/main"-> "ref:refs/heads/main"  (only the main branch — recommended)
+  #   "environment:x"  -> "environment:x"        (a GitHub Environment)
+  _sub_suffix = var.trusted_git_ref == "" ? "*" : (
+    startswith(var.trusted_git_ref, "environment:") ? var.trusted_git_ref : "ref:${var.trusted_git_ref}"
+  )
+
+  # Repo → the `sub` condition value its role trusts.
   repo_subs = {
-    guardian = "repo:${var.github_org}/terraform-ai-guardian:*"
-    platform = "repo:${var.github_org}/platform-engineering-blueprint:*"
-    finops   = "repo:${var.github_org}/aws-finops-intelligence:*"
+    guardian = "repo:${var.github_org}/terraform-ai-guardian:${local._sub_suffix}"
+    platform = "repo:${var.github_org}/platform-engineering-blueprint:${local._sub_suffix}"
+    finops   = "repo:${var.github_org}/aws-finops-intelligence:${local._sub_suffix}"
   }
 }
 

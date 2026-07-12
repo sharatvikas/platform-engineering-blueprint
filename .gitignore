@@ -12,3 +12,6 @@ terraform/modules/**/.terraform.lock.hcl
 .DS_Store
 .idea/
 .vscode/
+
+# Deployment-specific variable files (may contain account IDs / config)
+*.tfvars

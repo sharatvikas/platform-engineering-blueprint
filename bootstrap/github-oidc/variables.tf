@@ -99,3 +99,17 @@ variable "role_name_prefix" {
   type        = string
   default     = "gha-oidc"
 }
+
+variable "trusted_git_ref" {
+  description = <<-EOT
+    Git ref a GitHub Actions workflow must be running from to assume these roles,
+    e.g. "refs/heads/main". Empty string ("") trusts ANY ref/branch/tag/PR/env in
+    the repo (the sub wildcard ":*"). Set to "refs/heads/main" so ONLY workflows on
+    the default branch (schedule runs + workflow_dispatch triggered on main) can
+    assume the roles — no feature branches, PRs, or forks. Recommended for
+    security. To gate on a GitHub Environment instead, use "environment:<name>"
+    by editing local._sub_suffix in roles.tf.
+  EOT
+  type        = string
+  default     = ""
+}
