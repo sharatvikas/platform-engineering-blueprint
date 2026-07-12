@@ -114,6 +114,25 @@ platform-engineering-blueprint/
 
 ---
 
+## Try it locally
+
+You can verify the whole blueprint is well-formed **without an AWS account, credentials, or a state backend** — the same checks CI runs on every push in [`.github/workflows/validate.yaml`](.github/workflows/validate.yaml):
+
+```bash
+# Canonical HCL formatting across all Terraform
+terraform fmt -check -recursive terraform
+
+# Per root/module: init with no backend, then validate (no cloud access)
+for d in $(find terraform -type f -name '*.tf' -not -path '*/.terraform/*' \
+             -exec dirname {} \; | sort -u); do
+  ( cd "$d" && terraform init -backend=false -input=false && terraform validate )
+done
+```
+
+This confirms every Terraform root and module parses, type-checks, and is correctly formatted (CI additionally runs `yamllint` over the ArgoCD/Crossplane/Backstage manifests). Live-infra checks that need real credentials live in the separate, credential-gated drift-detection workflow.
+
+---
+
 ## Getting Started
 
 ### Bootstrap order
