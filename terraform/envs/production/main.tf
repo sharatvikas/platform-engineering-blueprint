@@ -19,9 +19,9 @@ terraform {
   }
 
   backend "s3" {
-    bucket         = "sovrn-terraform-state"
+    bucket         = "platform-terraform-state"
     key            = "production/platform/terraform.tfstate"
-    region         = "us-east-1"
+    region         = "us-east-2"
     encrypt        = true
     dynamodb_table = "terraform-state-lock"
   }
@@ -41,7 +41,7 @@ provider "aws" {
 }
 
 locals {
-  cluster_name = "sovrn-production"
+  cluster_name = "platform-production"
   aws_region   = var.aws_region
 }
 
@@ -73,7 +73,7 @@ module "vpc" {
 module "eks" {
   source = "../../modules/eks-cluster"
 
-  name               = "sovrn" # cluster name becomes sovrn-production
+  name               = "platform" # cluster name becomes platform-production
   environment        = "production"
   kubernetes_version = "1.29"
   subnet_ids         = module.vpc.private_subnet_ids
@@ -187,7 +187,7 @@ resource "helm_release" "argocd" {
         ingress = {
           enabled          = true
           ingressClassName = "nginx"
-          hosts            = ["argocd.internal.sovrn.com"]
+          hosts            = ["argocd.internal.example.com"]
         }
       }
       configs = {
