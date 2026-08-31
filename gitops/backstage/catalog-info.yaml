@@ -39,7 +39,7 @@ metadata:
     aws/account-id: "123456789012"
     aws/region: us-east-1
     runbook-url: https://github.com/sharatvikas/platform-engineering-blueprint/blob/main/docs/runbooks/eks-cluster.md
-    grafana-dashboard-url: https://grafana.internal.sovrn.com/d/k8s-cluster
+    grafana-dashboard-url: https://grafana.internal.example.com/d/k8s-cluster
 spec:
   type: kubernetes-cluster
   lifecycle: production
@@ -85,7 +85,7 @@ metadata:
     argocd/app-name: platform-root
     backstage.io/kubernetes-id: argocd
   links:
-    - url: https://argocd.internal.sovrn.com
+    - url: https://argocd.internal.example.com
       title: ArgoCD UI
       icon: dashboard
 spec:
@@ -135,5 +135,5 @@ spec:
   type: team
   profile:
     displayName: Platform Engineering
-    email: platform@sovrn.com
+    email: platform@example.com
   children: []
