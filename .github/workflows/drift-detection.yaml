@@ -51,13 +51,18 @@ jobs:
       - id: check
         env:
           AWS_TERRAFORM_ROLE_ARN: ${{ secrets.AWS_TERRAFORM_ROLE_ARN }}
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
         run: |
-          if [ -n "${AWS_TERRAFORM_ROLE_ARN}" ]; then
+          MISSING=""
+          [ -z "${AWS_TERRAFORM_ROLE_ARN}" ] && MISSING="${MISSING} AWS_TERRAFORM_ROLE_ARN"
+          [ -z "${TF_STATE_BUCKET}" ] && MISSING="${MISSING} TF_STATE_BUCKET"
+
+          if [ -z "${MISSING}" ]; then
             echo "has-creds=true" >> "$GITHUB_OUTPUT"
-            echo "AWS credentials configured — drift detection will run."
+            echo "AWS credentials and state backend configured — drift detection will run."
           else
             echo "has-creds=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::AWS_TERRAFORM_ROLE_ARN is not set — skipping drift detection. This is expected on a public/fork clone with no cloud credentials."
+            echo "::notice::Missing secret(s):${MISSING} — skipping drift detection. This is expected on a public/fork clone with no cloud credentials."
           fi
 
   detect-drift:
@@ -87,11 +92,51 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
           cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
 
+      # Drift is only meaningful against a platform that has actually been
+      # applied. Until `terraform apply` has run once there is no state object,
+      # so `plan` would report the entire stack as "to add" and open a bogus
+      # drift issue on every scheduled run. Detect that and skip cleanly.
+      - name: Check for existing Terraform state
+        id: state
+        env:
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+        run: |
+          ENVIRONMENT="${{ inputs.environment || 'production' }}"
+          WORKSPACE="${{ inputs.workspace || 'default' }}"
+          KEY="${ENVIRONMENT}/platform/terraform.tfstate"
+
+          # Non-default workspaces live under the env:/ prefix in the S3 backend.
+          if [ "$WORKSPACE" != "default" ]; then
+            KEY="env:/${WORKSPACE}/${KEY}"
+          fi
+
+          echo "state_key=${KEY}" >> "$GITHUB_OUTPUT"
+
+          if aws s3api head-object --bucket "${TF_STATE_BUCKET}" --key "${KEY}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Found remote state at s3://${TF_STATE_BUCKET}/${KEY}"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No Terraform state at s3://${TF_STATE_BUCKET}/${KEY} — the ${ENVIRONMENT} platform has not been applied yet, so there is nothing to drift from. Skipping drift detection."
+          fi
+
       - name: Terraform init
+        if: steps.state.outputs.exists == 'true'
         working-directory: terraform/envs/${{ inputs.environment || 'production' }}
-        run: terraform init -input=false
+        env:
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+        run: |
+          # The backend block is a partial config (see main.tf) so the bucket,
+          # region and key are supplied here. The region MUST be the bucket's
+          # real region: a mismatch makes S3 answer ListObjectsV2 with a 301
+          # and init fails with "Failed to get existing workspaces".
+          terraform init -input=false \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="key=${{ steps.state.outputs.state_key }}"
 
       - name: Select workspace
+        if: steps.state.outputs.exists == 'true'
         working-directory: terraform/envs/${{ inputs.environment || 'production' }}
         run: |
           WORKSPACE="${{ inputs.workspace || 'default' }}"
@@ -99,6 +144,7 @@ jobs:
 
       - name: Run drift detection plan
         id: plan
+        if: steps.state.outputs.exists == 'true'
         working-directory: terraform/envs/${{ inputs.environment || 'production' }}
         run: |
           set +e
@@ -247,6 +293,13 @@ jobs:
                 ]
               }]
             }"
+
+      - name: Report not-yet-deployed
+        if: steps.state.outputs.exists != 'true'
+        run: |
+          echo "The ${{ inputs.environment || 'production' }} platform has not been applied yet —"
+          echo "no remote state at s3://***/${{ steps.state.outputs.state_key }}."
+          echo "Drift detection will start reporting once \`terraform apply\` has run once."
 
       - name: Report clean state
         if: steps.plan.outputs.drift_detected == 'false'
