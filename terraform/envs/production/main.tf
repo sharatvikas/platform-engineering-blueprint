@@ -18,10 +18,16 @@ terraform {
     }
   }
 
+  # Partial backend configuration — bucket, region and key are supplied at
+  # init time so this blueprint stays account-agnostic (no hard-coded bucket
+  # name or account ID in a public repo).
+  #
+  #   CI:    .github/workflows/drift-detection.yaml passes them from the
+  #          TF_STATE_BUCKET secret + AWS_REGION (bucket name is an output of
+  #          bootstrap/github-oidc: `terraform output TF_STATE_BUCKET`).
+  #   Local: terraform init -backend-config=backend.hcl
+  #          (copy backend.hcl.example and fill in your bucket).
   backend "s3" {
-    bucket         = "platform-terraform-state"
-    key            = "production/platform/terraform.tfstate"
-    region         = "us-east-2"
     encrypt        = true
     dynamodb_table = "terraform-state-lock"
   }
