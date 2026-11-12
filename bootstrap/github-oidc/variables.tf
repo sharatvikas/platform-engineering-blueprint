@@ -113,3 +113,27 @@ variable "trusted_git_ref" {
   type        = string
   default     = ""
 }
+
+# ── Shared read-only CI role ───────────────────────────────────────────────────
+
+variable "ci_role_name" {
+  description = "Name of the shared read-only CI role (not prefixed with role_name_prefix)."
+  type        = string
+  default     = "github-actions-ci"
+}
+
+variable "ci_role_repos" {
+  description = <<-EOT
+    Repos (names under var.github_org) whose workflows may assume the shared
+    read-only CI role, from any branch/PR/env. Add private repos in your
+    gitignored terraform.tfvars rather than here, so their names stay out of
+    this public blueprint.
+  EOT
+  type        = list(string)
+  default     = ["platform-engineering-blueprint", "terraform-ai-guardian"]
+
+  validation {
+    condition     = length(var.ci_role_repos) > 0
+    error_message = "ci_role_repos must name at least one repo."
+  }
+}

@@ -1,5 +1,6 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Least-privilege IAM roles for GitHub Actions, one per repo/purpose.
+# Least-privilege IAM roles for GitHub Actions: a shared read-only CI role, plus
+# one role per repo/purpose that needs more.
 #
 # Every trust policy:
 #   • uses sts:AssumeRoleWithWebIdentity federated to the OIDC provider
@@ -24,7 +25,6 @@ locals {
   # Repo → the `sub` condition value its role trusts.
   repo_subs = {
     guardian = "repo:${var.github_org}/terraform-ai-guardian:${local._sub_suffix}"
-    platform = "repo:${var.github_org}/platform-engineering-blueprint:${local._sub_suffix}"
     finops   = "repo:${var.github_org}/aws-finops-intelligence:${local._sub_suffix}"
   }
 }
@@ -62,7 +62,7 @@ data "aws_iam_policy_document" "trust" {
 }
 
 # ── Shared policy: Terraform remote-state access (read/write state + lock) ────
-# Attached to the plan/drift roles. Scoped to exactly the state bucket and lock
+# Attached to the shared CI role. Scoped to exactly the state bucket and lock
 # table resolved in main.tf — nothing else.
 data "aws_iam_policy_document" "tf_state_access" {
   statement {
@@ -88,32 +88,61 @@ data "aws_iam_policy_document" "tf_state_access" {
 }
 
 # =============================================================================
-# terraform-ai-guardian  →  plan / validate / drift role
+# Shared CI role  →  read-only plan / validate / drift   (github-actions-ci)
 #
-# Feeds THREE secrets, all pointing at THIS one role because they need the
-# identical permission set (read-only everywhere + Terraform state R/W):
-#   AWS_PLAN_ROLE_ARN, TF_AWS_ROLE_ARN, AWS_DRIFT_ROLE_ARN
+# One role for every repo whose CI only needs to read: `terraform plan`, drift
+# detection and validation. It feeds these secrets:
+#   terraform-ai-guardian:          AWS_PLAN_ROLE_ARN, TF_AWS_ROLE_ARN, AWS_DRIFT_ROLE_ARN
+#   platform-engineering-blueprint: AWS_TERRAFORM_ROLE_ARN
 #
-# Read-only everywhere = AWS-managed ReadOnlyAccess. `terraform plan` never
-# mutates infra; it only reads current state of resources, reads remote state,
-# and takes the state lock. This role deliberately CANNOT create/modify/delete
-# any infrastructure.
+# Read-only everywhere (AWS-managed ReadOnlyAccess) + Terraform state R/W. It
+# deliberately CANNOT create, modify or delete infrastructure.
+#
+# Trust: every repo in var.ci_role_repos, on ANY branch/PR/env (`:*`), so a
+# workflow can be tested from a feature branch before merge. That is safe only
+# because the role is read-only; fork PRs get no OIDC token. Repos that deploy
+# need their own, narrower-trusted role.
 # =============================================================================
-resource "aws_iam_role" "guardian_plan" {
-  name                 = "${var.role_name_prefix}-guardian-plan"
-  description          = "GitHub Actions (terraform-ai-guardian): read-only plan/validate/drift + Terraform state access. No infra mutation."
-  assume_role_policy   = data.aws_iam_policy_document.trust["guardian"].json
+data "aws_iam_policy_document" "ci_trust" {
+  statement {
+    sid     = "GitHubActionsOIDC"
+    effect  = "Allow"
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+
+    principals {
+      type        = "Federated"
+      identifiers = [local.oidc_provider_arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "${local.oidc_host}:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringLike"
+      variable = "${local.oidc_host}:sub"
+      values   = [for repo in var.ci_role_repos : "repo:${var.github_org}/${repo}:*"]
+    }
+  }
+}
+
+resource "aws_iam_role" "github_actions_ci" {
+  name                 = var.ci_role_name
+  description          = "GitHub Actions CI (OIDC): read-only + Terraform state, for ${join(", ", var.ci_role_repos)} on any branch"
+  assume_role_policy   = data.aws_iam_policy_document.ci_trust.json
   max_session_duration = 3600
 }
 
-resource "aws_iam_role_policy_attachment" "guardian_plan_readonly" {
-  role       = aws_iam_role.guardian_plan.name
+resource "aws_iam_role_policy_attachment" "github_actions_ci_readonly" {
+  role       = aws_iam_role.github_actions_ci.name
   policy_arn = "arn:${local.partition}:iam::aws:policy/ReadOnlyAccess"
 }
 
-resource "aws_iam_role_policy" "guardian_plan_state" {
+resource "aws_iam_role_policy" "github_actions_ci_state" {
   name   = "tf-state-access"
-  role   = aws_iam_role.guardian_plan.id
+  role   = aws_iam_role.github_actions_ci.id
   policy = data.aws_iam_policy_document.tf_state_access.json
 }
 
@@ -172,32 +201,6 @@ resource "aws_iam_role_policy" "org_reader" {
   name   = "org-read-and-assume"
   role   = aws_iam_role.org_reader.id
   policy = data.aws_iam_policy_document.org_reader.json
-}
-
-# =============================================================================
-# platform-engineering-blueprint  →  drift role   (AWS_TERRAFORM_ROLE_ARN)
-#
-# Read-only everywhere + Terraform state access, for drift detection of the
-# platform itself (see .github/workflows/drift-detection.yaml, which reads
-# secrets.AWS_TERRAFORM_ROLE_ARN). Deliberately NOT allowed to apply/provision.
-# Broadening this to apply is a separate, explicit escalation — see README.
-# =============================================================================
-resource "aws_iam_role" "platform_drift" {
-  name                 = "${var.role_name_prefix}-platform-drift"
-  description          = "GitHub Actions (platform-engineering-blueprint): read-only drift detection + Terraform state access. No apply/provision."
-  assume_role_policy   = data.aws_iam_policy_document.trust["platform"].json
-  max_session_duration = 3600
-}
-
-resource "aws_iam_role_policy_attachment" "platform_drift_readonly" {
-  role       = aws_iam_role.platform_drift.name
-  policy_arn = "arn:${local.partition}:iam::aws:policy/ReadOnlyAccess"
-}
-
-resource "aws_iam_role_policy" "platform_drift_state" {
-  name   = "tf-state-access"
-  role   = aws_iam_role.platform_drift.id
-  policy = data.aws_iam_policy_document.tf_state_access.json
 }
 
 # =============================================================================
