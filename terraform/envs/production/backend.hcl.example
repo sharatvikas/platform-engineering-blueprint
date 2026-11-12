@@ -1,0 +1,14 @@
+# Remote-state backend settings for the production root module.
+#
+#   cp backend.hcl.example backend.hcl        # backend.hcl is gitignored
+#   terraform init -backend-config=backend.hcl
+#
+# `bucket` is created by bootstrap/github-oidc and printed by:
+#   terraform -chdir=../../../bootstrap/github-oidc output -raw TF_STATE_BUCKET
+#
+# The bucket's region must match `region` here, or S3 answers ListObjectsV2
+# with a 301 and `terraform init` fails with "Failed to get existing workspaces".
+
+bucket = "<github-org>-tfstate-<aws-account-id>"
+region = "us-east-1"
+key    = "production/platform/terraform.tfstate"

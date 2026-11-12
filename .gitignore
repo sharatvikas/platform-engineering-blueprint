@@ -15,3 +15,6 @@ terraform/modules/**/.terraform.lock.hcl
 
 # Deployment-specific variable files (may contain account IDs / config)
 *.tfvars
+
+# Local partial-backend config (contains account-specific bucket names)
+backend.hcl
