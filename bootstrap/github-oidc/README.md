@@ -4,8 +4,9 @@ Keyless, short-lived AWS access for GitHub Actions. This Terraform config create
 
 - **One account-global GitHub OIDC identity provider**
   (`token.actions.githubusercontent.com`, audience `sts.amazonaws.com`).
-- **Least-privilege IAM roles, one per repo/purpose**, each with a trust policy
-  scoped to a specific GitHub repository. Workflows assume these roles via
+- **Least-privilege IAM roles**: one shared read-only CI role for every repo that
+  only plans or checks drift, plus one role per repo/purpose that needs more,
+  each with a trust policy scoped to specific GitHub repositories. Workflows assume these roles via
   `aws-actions/configure-aws-credentials` — **no long-lived access keys**.
 - **An optional Terraform remote-state backend** (versioned + encrypted S3
   bucket with a TLS-only policy, plus a DynamoDB lock table).
@@ -14,11 +15,10 @@ Account ID is resolved with `data.aws_caller_identity` — nothing is hardcoded.
 
 ## What gets created
 
-| Role (name prefix `gha-oidc-`) | Repo | Purpose | Permissions |
+| Role | Repo | Purpose | Permissions |
 |---|---|---|---|
-| `gha-oidc-guardian-plan` | `terraform-ai-guardian` | plan / validate / drift | AWS-managed `ReadOnlyAccess` + Terraform state R/W (state bucket + lock table). No infra mutation. |
+| `github-actions-ci` | every repo in `ci_role_repos` (default: `platform-engineering-blueprint`, `terraform-ai-guardian`), **any branch** | plan / validate / drift | AWS-managed `ReadOnlyAccess` + Terraform state R/W (state bucket + lock table). No infra mutation. |
 | `gha-oidc-guardian-org-reader` | `terraform-ai-guardian` | multi-account scanning | `organizations:Describe*/List*`, `sts:AssumeRole` into member-account role, `config:*` read, `securityhub:*` read. |
-| `gha-oidc-platform-drift` | `platform-engineering-blueprint` | drift detection | `ReadOnlyAccess` + Terraform state R/W. No apply/provision. |
 | `gha-oidc-finops-reader` | `aws-finops-intelligence` | cost/usage read | Cost Explorer (`ce:Get*/Describe*/List*`), CloudWatch metrics read, Compute Optimizer `Get*`, `ec2:Describe*`, `rds:Describe*`, `s3:List*`, `pricing:*`. No write. |
 
 ## Secret → role/value mapping
@@ -28,19 +28,35 @@ command to run. Summary:
 
 | GitHub secret | Repo | Fed by output / value |
 |---|---|---|
-| `AWS_PLAN_ROLE_ARN` | `terraform-ai-guardian` | `gha-oidc-guardian-plan` ARN |
+| `AWS_PLAN_ROLE_ARN` | `terraform-ai-guardian` | `github-actions-ci` ARN |
 | `TF_AWS_ROLE_ARN` | `terraform-ai-guardian` | **same role** as above |
 | `AWS_DRIFT_ROLE_ARN` | `terraform-ai-guardian` | **same role** as above |
 | `AWS_ORG_READER_ROLE_ARN` | `terraform-ai-guardian` | `gha-oidc-guardian-org-reader` ARN |
 | `TF_STATE_BUCKET` | `terraform-ai-guardian` (+ any repo sharing the backend) | state bucket name |
-| `AWS_TERRAFORM_ROLE_ARN` | `platform-engineering-blueprint` | `gha-oidc-platform-drift` ARN |
+| `AWS_TERRAFORM_ROLE_ARN` | `platform-engineering-blueprint` | `github-actions-ci` ARN (same role) |
 | `AWS_ROLE_ARN` | `aws-finops-intelligence` | `gha-oidc-finops-reader` ARN |
 
-> **Why three secrets point at one guardian role:** `AWS_PLAN_ROLE_ARN`,
-> `TF_AWS_ROLE_ARN`, and `AWS_DRIFT_ROLE_ARN` all need the identical permission
-> set (read-only everywhere + Terraform state access). Collapsing them into one
-> role keeps the trust surface minimal and the mapping auditable. Split them
-> later if plan and drift need to diverge.
+> **Why four secrets point at one CI role:** `AWS_PLAN_ROLE_ARN`,
+> `TF_AWS_ROLE_ARN`, `AWS_DRIFT_ROLE_ARN` and `AWS_TERRAFORM_ROLE_ARN` all need
+> the identical permission set (read-only everywhere + Terraform state access).
+> One role keeps the mapping auditable. It trusts any branch so a workflow can be
+> tested before merge; that is acceptable only because the role is read-only.
+> Give a repo that deploys its own role with `trusted_git_ref` pinned to `main`.
+>
+> **Private repos:** add them to `ci_role_repos` in your gitignored
+> `terraform.tfvars`, not in `variables.tf`, so their names stay out of this
+> public repo.
+
+### Adopting a `github-actions-ci` role created outside Terraform
+
+If the role already exists (e.g. created with the AWS CLI), import it before
+`apply` so Terraform manages it instead of failing on a name clash:
+
+```bash
+terraform import aws_iam_role.github_actions_ci github-actions-ci
+terraform import aws_iam_role_policy_attachment.github_actions_ci_readonly github-actions-ci/arn:aws:iam::aws:policy/ReadOnlyAccess
+terraform import aws_iam_role_policy.github_actions_ci_state github-actions-ci:tf-state-access
+```
 
 ## Apply
 

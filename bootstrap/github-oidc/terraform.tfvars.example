@@ -23,6 +23,11 @@
 # existing_state_bucket_name     = "my-existing-tfstate-bucket"
 # existing_state_lock_table_name = "terraform-state-lock"
 
+# ── Shared read-only CI role (github-actions-ci) ───────────────────────────────
+# Repos whose CI may assume it, from any branch. List private repos here (this
+# file is gitignored), not in variables.tf.
+# ci_role_repos = ["platform-engineering-blueprint", "terraform-ai-guardian", "my-private-repo"]
+
 # ── Org-reader role ────────────────────────────────────────────────────────────
 # IMPORTANT: set this to the read-only role that exists in each member account
 # that the org-reader role may assume. The default below is admin-level — change

@@ -11,18 +11,18 @@ output "oidc_provider_arn" {
 # ── terraform-ai-guardian ────────────────────────────────────────────────────
 
 output "AWS_PLAN_ROLE_ARN" {
-  description = "gh secret set AWS_PLAN_ROLE_ARN --repo sharatvikas/terraform-ai-guardian --body <value>  (read-only plan/validate + TF state)"
-  value       = aws_iam_role.guardian_plan.arn
+  description = "gh secret set AWS_PLAN_ROLE_ARN --repo sharatvikas/terraform-ai-guardian --body <value>  (shared github-actions-ci role — read-only plan/validate + TF state)"
+  value       = aws_iam_role.github_actions_ci.arn
 }
 
 output "TF_AWS_ROLE_ARN" {
-  description = "gh secret set TF_AWS_ROLE_ARN --repo sharatvikas/terraform-ai-guardian --body <value>  (same role as AWS_PLAN_ROLE_ARN — read-only plan/validate + TF state)"
-  value       = aws_iam_role.guardian_plan.arn
+  description = "gh secret set TF_AWS_ROLE_ARN --repo sharatvikas/terraform-ai-guardian --body <value>  (shared github-actions-ci role — read-only plan/validate + TF state)"
+  value       = aws_iam_role.github_actions_ci.arn
 }
 
 output "AWS_DRIFT_ROLE_ARN" {
-  description = "gh secret set AWS_DRIFT_ROLE_ARN --repo sharatvikas/terraform-ai-guardian --body <value>  (same role as AWS_PLAN_ROLE_ARN — read-only + TF state; drift detection)"
-  value       = aws_iam_role.guardian_plan.arn
+  description = "gh secret set AWS_DRIFT_ROLE_ARN --repo sharatvikas/terraform-ai-guardian --body <value>  (shared github-actions-ci role — read-only + TF state; drift detection)"
+  value       = aws_iam_role.github_actions_ci.arn
 }
 
 output "AWS_ORG_READER_ROLE_ARN" {
@@ -33,8 +33,8 @@ output "AWS_ORG_READER_ROLE_ARN" {
 # ── platform-engineering-blueprint ───────────────────────────────────────────
 
 output "AWS_TERRAFORM_ROLE_ARN" {
-  description = "gh secret set AWS_TERRAFORM_ROLE_ARN --repo sharatvikas/platform-engineering-blueprint --body <value>  (read-only drift detection + TF state; consumed by .github/workflows/drift-detection.yaml)"
-  value       = aws_iam_role.platform_drift.arn
+  description = "gh secret set AWS_TERRAFORM_ROLE_ARN --repo sharatvikas/platform-engineering-blueprint --body <value>  (shared github-actions-ci role — read-only drift detection + TF state; consumed by .github/workflows/drift-detection.yaml)"
+  value       = aws_iam_role.github_actions_ci.arn
 }
 
 # ── aws-finops-intelligence ──────────────────────────────────────────────────
