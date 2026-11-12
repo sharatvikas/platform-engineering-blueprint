@@ -76,6 +76,30 @@ terraform apply
 > roots use — chicken-and-egg). It is small and rarely changes; local state is
 > fine, or migrate it into the new backend afterwards.
 
+### Keeping this config's state in the backend it created
+
+Once the bucket exists, keep this config's state there with a gitignored
+`backend_override.tf` (Terraform merges `*_override.tf` files over the code, so
+the committed config stays backend-free for a first run):
+
+```hcl
+terraform {
+  backend "s3" {
+    bucket         = "<github-org>-tfstate-<aws-account-id>"
+    key            = "bootstrap/github-oidc/terraform.tfstate"
+    region         = "us-east-1"
+    dynamodb_table = "terraform-state-lock"
+    encrypt        = true
+  }
+}
+```
+
+Then `terraform init -migrate-state`. Anyone applying later needs the same file.
+
+If the GitHub OIDC provider was created elsewhere (another stack), set
+`create_oidc_provider = false` and `existing_oidc_provider_arn` rather than
+importing it, so two configs never manage the same provider.
+
 ## Wire up the secrets
 
 After `terraform apply`, push each ARN/name into the right repo's Actions

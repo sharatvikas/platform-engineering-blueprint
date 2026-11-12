@@ -18,3 +18,6 @@ terraform/modules/**/.terraform.lock.hcl
 
 # Local partial-backend config (contains account-specific bucket names)
 backend.hcl
+
+# Local Terraform overrides (e.g. a backend for bootstrap/github-oidc state)
+*_override.tf
